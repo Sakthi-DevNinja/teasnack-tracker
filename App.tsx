@@ -54,7 +54,7 @@ const App: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+      <main className="min-h-[calc(100vh-65px)] max-w-5xl mx-auto px-4 sm:px-6 py-8">
         {currentView === 'entry' && (
             <div className="animate-fade-in">
                 <DailyEntry />
