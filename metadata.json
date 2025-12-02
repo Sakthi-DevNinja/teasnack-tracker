@@ -1,0 +1,5 @@
+{
+  "name": "TeaSnack Tracker",
+  "description": "A comprehensive office consumption tracker for tea, coffee, and snacks with automated billing and tally adjustments.",
+  "requestFramePermissions": []
+}
