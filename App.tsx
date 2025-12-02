@@ -17,7 +17,7 @@ const App: React.FC = () => {
             <div className="w-8 h-8 bg-tea-500 rounded-lg flex items-center justify-center text-white">
               <Coffee className="w-5 h-5" />
             </div>
-            <h1 className="text-xl font-bold text-gray-800 tracking-tight">TeaSnack<span className="text-tea-600">Tracker</span></h1>
+            <h1 className="text-xl font-bold text-gray-800 tracking-tight">Tea<span className="text-tea-600">Desk</span></h1>
           </div>
           
           <nav className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg overflow-x-auto">
@@ -78,8 +78,7 @@ const App: React.FC = () => {
       </main>
       
       <footer className="max-w-5xl mx-auto px-6 py-8 text-center text-gray-400 text-sm print:hidden">
-        <p>&copy; {new Date().getFullYear()} TeaSnack Tracker. Built with React & Tailwind.</p>
-        <p className="mt-1 text-xs">Note: This demo uses LocalStorage. Data will persist in this browser only.</p>
+        <p>&copy; {new Date().getFullYear()} teadesk. Built with React & Tailwind.</p>
       </footer>
     </div>
   );
