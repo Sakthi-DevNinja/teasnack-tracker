@@ -10,11 +10,20 @@ interface SnackSlot {
   quantity: number;
 }
 
+// Helper: Convert ISO string to Local YYYY-MM-DD
+const getLocalYMD = (isoStr: string) => {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    const offset = d.getTimezoneOffset() * 60000;
+    const local = new Date(d.getTime() - offset);
+    return local.toISOString().split('T')[0];
+};
+
 export const DailyEntry: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null); // Track specific deleting group
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null); // Track group waiting for confirmation
+  const [deletingId, setDeletingId] = useState<string | null>(null); 
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [items, setItems] = useState<Item[]>([]);
@@ -37,7 +46,7 @@ export const DailyEntry: React.FC = () => {
 
   const initData = async () => {
     setLoading(true);
-    await StorageService.init(); // Fetch from Google Sheet
+    await StorageService.init(); 
     loadLocalData();
     setLoading(false);
   };
@@ -49,9 +58,10 @@ export const DailyEntry: React.FC = () => {
   };
 
   const refreshLogs = () => {
-    const today = new Date().toISOString().split('T')[0];
+    const todayLocal = getLocalYMD(new Date().toISOString());
     const allLogs = StorageService.getConsumptions();
-    const todaysLogs = allLogs.filter(log => log.date.startsWith(today));
+    // Filter using local date comparison
+    const todaysLogs = allLogs.filter(log => getLocalYMD(log.date) === todayLocal);
     setRecentLog(todaysLogs);
   };
 
@@ -140,23 +150,18 @@ export const DailyEntry: React.FC = () => {
       // 3. Set Snacks
       const snackLogs = logs.filter(l => l.itemType === 'snack');
       if (snackLogs.length > 0) {
-          // Aggregate identical snacks (Same ItemID + Same Price) back into Count
-          const aggregated: Record<string, {itemId: string, price: number, count: number}> = {};
-          
+          // If editing existing rows, we likely have 1 row per item if old data, or 1 row with qty if new data.
+          // We need to normalize back to slots.
+          const slots: SnackSlot[] = [];
           snackLogs.forEach(s => {
-              const key = `${s.itemId}_${s.price}`;
-              if (!aggregated[key]) aggregated[key] = { itemId: s.itemId, price: s.price, count: 0 };
-              aggregated[key].count += 1;
+              slots.push({
+                  key: crypto.randomUUID(),
+                  itemId: s.itemId,
+                  price: s.price,
+                  quantity: s.quantity || 1
+              });
           });
-
-          const restoredSlots = Object.values(aggregated).map(a => ({
-              key: crypto.randomUUID(),
-              itemId: a.itemId,
-              price: a.price,
-              quantity: a.count
-          }));
-          
-          setSnackSlots(restoredSlots);
+          setSnackSlots(slots);
       } else {
           setSnackSlots([{ key: crypto.randomUUID(), itemId: '', price: 0, quantity: 1 }]);
       }
@@ -191,6 +196,7 @@ export const DailyEntry: React.FC = () => {
 
         // CALCULATE SEQUENTIAL ID START POINT
         const allLogs = StorageService.getConsumptions();
+
         let currentMaxId = allLogs.reduce((max, log) => {
             if (log.id.startsWith('c')) {
                 const num = parseInt(log.id.substring(1), 10);
@@ -199,30 +205,28 @@ export const DailyEntry: React.FC = () => {
             return max;
         }, 0);
 
-        const prepareEntry = (itemId: string, price: number) => {
+        const createEntry = (itemId: string, price: number, qty: number, type: 'drink' | 'snack'): Consumption => {
+            currentMaxId++;
             const item = items.find(i => i.id === itemId);
-            if (item) {
-                currentMaxId++;
-                const newId = `c${currentMaxId}`;
-                newEntries.push({
-                    id: newId,
-                    employeeId: employee.id,
-                    itemId: item.id,
-                    itemName: item.name,
-                    itemType: item.type,
-                    price: price,
-                    date: timestamp 
-                });
-            }
+            return {
+                id: `c${currentMaxId}`,
+                employeeId: employee.id,
+                itemId: itemId,
+                itemName: item ? item.name : 'Unknown',
+                itemType: type,
+                price: price,
+                date: timestamp,
+                quantity: qty // Send quantity directly
+            };
         };
 
-        if (selectedDrinkId) prepareEntry(selectedDrinkId, drinkPrice);
+        if (selectedDrinkId) {
+            newEntries.push(createEntry(selectedDrinkId, drinkPrice, 1, 'drink'));
+        }
         
         for (const slot of snackSlots) {
-            if (slot.itemId) {
-                for (let i = 0; i < slot.quantity; i++) {
-                   prepareEntry(slot.itemId, slot.price);
-                }
+            if (slot.itemId && slot.quantity > 0) {
+                newEntries.push(createEntry(slot.itemId, slot.price, slot.quantity, 'snack'));
             }
         }
 
@@ -268,12 +272,14 @@ export const DailyEntry: React.FC = () => {
     }
   };
 
+  // Updated aggregation for UI display
   const getAggregatedLogs = (logs: Consumption[]) => {
       const agg: Record<string, { count: number, name: string, type: string, totalCost: number }> = {};
       logs.forEach(log => {
+          const qty = log.quantity || 1;
           if (!agg[log.itemId]) agg[log.itemId] = { count: 0, name: log.itemName, type: log.itemType, totalCost: 0 };
-          agg[log.itemId].count += 1;
-          agg[log.itemId].totalCost += log.price;
+          agg[log.itemId].count += qty;
+          agg[log.itemId].totalCost += (log.price * qty);
       });
       return Object.values(agg);
   };
@@ -435,7 +441,7 @@ export const DailyEntry: React.FC = () => {
                 const firstLog = logs[0];
                 const empName = employees.find(e => e.id === firstLog.employeeId)?.name || 'Unknown';
                 const time = new Date(firstLog.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const totalCost = logs.reduce((sum, item) => sum + item.price, 0);
+                const totalCost = logs.reduce((sum, item) => sum + (item.price * (item.quantity || 1)), 0);
                 const aggregatedItems = getAggregatedLogs(logs);
                 const isEditingThis = editingLogIds && editingLogIds.length === logs.length && editingLogIds[0] === logs[0].id;
                 const isDeletingThis = deletingId === key;

@@ -4,6 +4,15 @@ import { BillingService, DailyCompanyBill, EmployeeBill } from '../services/bill
 import { Consumption, Employee } from '../types';
 import { Receipt, Calendar, Printer, Cookie, Loader2 } from 'lucide-react';
 
+// Helper: Convert ISO string to Local YYYY-MM-DD
+const getLocalYMD = (isoStr: string) => {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    const offset = d.getTimezoneOffset() * 60000;
+    const local = new Date(d.getTime() - offset);
+    return local.toISOString().split('T')[0];
+};
+
 export const BillGenerator: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -22,16 +31,19 @@ export const BillGenerator: React.FC = () => {
   const [dailyAdjustments, setDailyAdjustments] = useState<Record<string, Record<string, number>>>({});
 
   useEffect(() => {
-    // Default to current week
+    // Correctly calculate start (Monday) and end (Sunday) of current week
     const curr = new Date(); 
-    const first = curr.getDate() - curr.getDay() + 1; 
-    const last = first + 6; 
+    const day = curr.getDay() || 7; 
+    if (day !== 1) {
+        curr.setHours(-24 * (day - 1)); 
+    }
+    const firstDate = new Date(curr);
+    const lastDate = new Date(curr);
+    lastDate.setDate(lastDate.getDate() + 6); 
 
-    const firstday = new Date(curr.setDate(first)).toISOString().split('T')[0];
-    const lastday = new Date(curr.setDate(last)).toISOString().split('T')[0];
-    
-    setStartDate(firstday);
-    setEndDate(lastday);
+    // Use Local Date Strings
+    setStartDate(getLocalYMD(firstDate.toISOString()));
+    setEndDate(getLocalYMD(lastDate.toISOString()));
 
     initData();
   }, []);
@@ -58,7 +70,7 @@ export const BillGenerator: React.FC = () => {
       if (!startDate || !endDate) return;
       
       const filteredConsumptions = consumptions.filter(c => {
-          const cDate = c.date.split('T')[0];
+          const cDate = getLocalYMD(c.date); // Use local date check
           return cDate >= startDate && cDate <= endDate;
       });
 

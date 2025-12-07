@@ -39,6 +39,20 @@ export interface BillingResult {
   grandTotalCompanyAmount: number;
 }
 
+// Helper to expand quantity-based logs into single units for calculation parity
+const expandConsumptions = (logs: Consumption[]): Consumption[] => {
+    const expanded: Consumption[] = [];
+    logs.forEach(log => {
+        const qty = log.quantity || 1;
+        // Push N copies of the log (conceptually) so existing logic sees 1 item = 1 unit
+        for (let i = 0; i < qty; i++) {
+            // Create a virtual copy. ID doesn't matter for calc, just price/empId/type
+            expanded.push({ ...log });
+        }
+    });
+    return expanded;
+};
+
 export const BillingService = {
   calculateBilling: (
     consumptions: Consumption[], 
@@ -58,9 +72,9 @@ export const BillingService = {
     const companyBillRows: DailyCompanyBill[] = [];
     
     // We need to aggregate employee stats across the entire date range
-    // Structure: { empId: { items: [], originalCost: 0, deductedCount: 0, deductedCost: 0 } }
     const empAggregates: Record<string, {
-      items: Consumption[],
+      items: Consumption[], // Raw logs (compact with quantity)
+      expandedCount: number, // Total units count
       originalAmount: number,
       deductedCount: number,
       deductedAmount: number
@@ -68,7 +82,7 @@ export const BillingService = {
 
     // Initialize aggregates
     employees.forEach(e => {
-        empAggregates[e.id] = { items: [], originalAmount: 0, deductedCount: 0, deductedAmount: 0 };
+        empAggregates[e.id] = { items: [], expandedCount: 0, originalAmount: 0, deductedCount: 0, deductedAmount: 0 };
     });
 
     const sortedDates = Object.keys(groupedByDate).sort();
@@ -78,13 +92,15 @@ export const BillingService = {
     sortedDates.forEach(date => {
       const dailyLogs = groupedByDate[date];
       
+      // EXPAND LOGS FOR CALCULATION (Handles Quantity > 1)
+      const expandedLogs = expandConsumptions(dailyLogs);
+
       // --- Company Bill Calculation ---
-      const drinkItems = dailyLogs.filter(c => c.itemType === 'drink');
+      const drinkItems = expandedLogs.filter(c => c.itemType === 'drink');
       const drinkConsumers = new Set(drinkItems.map(c => c.employeeId));
       const actualDrinkCount = drinkConsumers.size;
       const dailyDrinkCost = drinkItems.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
       
-      // Initial Company Row (Before Transfer)
       const companyRow: DailyCompanyBill = {
           date,
           totalStaff: activeEmployeeCount,
@@ -95,11 +111,11 @@ export const BillingService = {
       };
 
       // --- Employee Snack Deduction Calculation ---
-      const snackLogs = dailyLogs.filter(c => c.itemType === 'snack');
+      const snackItemsExpanded = expandedLogs.filter(c => c.itemType === 'snack');
       
-      // Group snacks by employee for this day
+      // Group expanded snacks by employee for this day
       const dailySnacksByEmp: Record<string, Consumption[]> = {};
-      snackLogs.forEach(s => {
+      snackItemsExpanded.forEach(s => {
           if (!dailySnacksByEmp[s.employeeId]) dailySnacksByEmp[s.employeeId] = [];
           dailySnacksByEmp[s.employeeId].push(s);
       });
@@ -109,7 +125,7 @@ export const BillingService = {
 
       Object.keys(dailySnacksByEmp).forEach(empId => {
           const snacks = dailySnacksByEmp[empId];
-          const manualCount = todaysAdjustments[empId] || 0; // The count saved for this specific date
+          const manualCount = todaysAdjustments[empId] || 0; 
           
           // Sort descending price to deduct expensive ones first
           const sortedSnacks = [...snacks].sort((a,b) => (Number(b.price)||0) - (Number(a.price)||0));
@@ -124,12 +140,15 @@ export const BillingService = {
           const snacksToDeduct = sortedSnacks.slice(0, deductCount);
           const deductedAmount = snacksToDeduct.reduce((sum, s) => sum + (Number(s.price)||0), 0);
           
-          // Add to Global Manual Transfer Total
           totalManualTransferAmount += deductedAmount;
 
-          // Update Employee Aggregate
           if (empAggregates[empId]) {
-              empAggregates[empId].items.push(...snacks); // Add all snacks to list
+              // Note: We push raw logs for display, but calc based on expanded
+              // Need to find original logs for this day to push to 'items' list
+              const originalDailySnacks = dailyLogs.filter(l => l.itemType === 'snack' && l.employeeId === empId);
+              empAggregates[empId].items.push(...originalDailySnacks); 
+              
+              empAggregates[empId].expandedCount += totalSnacksCount;
               empAggregates[empId].originalAmount += snacks.reduce((sum, s) => sum + (Number(s.price)||0), 0);
               empAggregates[empId].deductedCount += deductCount;
               empAggregates[empId].deductedAmount += deductedAmount;
@@ -145,36 +164,34 @@ export const BillingService = {
     const employeeBills: EmployeeBill[] = employees.map(emp => {
         const agg = empAggregates[emp.id];
         
-        // Stats specifically for Today (for UI controls)
-        // We need to know how many snacks this person had TODAY to know the max limit for the +/- buttons
+        // Stats specifically for Today
         const todayLogs = groupedByDate[todayStr] || [];
-        const todaySnacks = todayLogs.filter(c => c.itemType === 'snack' && c.employeeId === emp.id);
+        // Important: Calculate today's max deductible based on expanded quantity
+        const todaySnacksExpanded = expandConsumptions(todayLogs.filter(c => c.itemType === 'snack' && c.employeeId === emp.id));
+        
         const todayAdjustment = (dailyAdjustments[todayStr] && dailyAdjustments[todayStr][emp.id]) || 0;
 
         return {
             employee: emp,
-            items: agg.items,
-            originalItemCount: agg.items.length,
+            items: agg.items, // List of raw logs (with qty)
+            originalItemCount: agg.expandedCount, // Sum of all quantities
             originalAmount: agg.originalAmount,
             
-            // Aggregated Deductions (Historical + Today)
             totalDeductedCount: agg.deductedCount,
             totalDeductedAmount: agg.deductedAmount,
             finalPayableAmount: Math.max(0, agg.originalAmount - agg.deductedAmount),
             
             automatedDeductedCount: 0,
-            manualAdjustmentCount: agg.deductedCount, // Total across period
+            manualAdjustmentCount: agg.deductedCount, 
             
-            // UI Helpers for Today's specific controls
+            // UI Helpers
             todayAdjustmentCount: todayAdjustment,
-            todayMaxDeductible: todaySnacks.length,
+            todayMaxDeductible: todaySnacksExpanded.length, // Max is total units
             
-            // Dummy fields to satisfy interface if reused, but we use logic below
             finalDeductedCount: agg.deductedCount, 
             finalDeductedAmount: agg.deductedAmount,
             
-            // UI Button Logic (Strictly for Today)
-            canIncreaseAdjustment: todayAdjustment < todaySnacks.length,
+            canIncreaseAdjustment: todayAdjustment < todaySnacksExpanded.length,
             canDecreaseAdjustment: todayAdjustment > 0
         };
     }).filter(bill => bill.originalItemCount > 0);

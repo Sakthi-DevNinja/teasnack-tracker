@@ -22,6 +22,7 @@ export interface Consumption {
   itemType: ItemType;
   price: number;
   date: string; // ISO Date String
+  quantity: number; // Added Quantity
 }
 
 export interface WeeklySummary {

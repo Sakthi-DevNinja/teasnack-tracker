@@ -20,9 +20,11 @@ export const TallyAutomation: React.FC<Props> = ({ date, consumptions, activeEmp
     const actualTeaCount = drinkConsumers.size;
 
     // 2. Identify Snack Consumers & Counts
+    // UPDATED: Sum quantities, not just rows
     const snackCounts: Record<string, number> = {};
     consumptions.filter(c => c.itemType === 'snack').forEach(c => {
-        snackCounts[c.employeeId] = (snackCounts[c.employeeId] || 0) + 1;
+        const qty = c.quantity || 1;
+        snackCounts[c.employeeId] = (snackCounts[c.employeeId] || 0) + qty;
     });
 
     // 3. Identify Filler Candidates
@@ -35,7 +37,7 @@ export const TallyAutomation: React.FC<Props> = ({ date, consumptions, activeEmp
             snackOnlyList.push(empId);
         }
         
-        // Condition B: Extra Snack (More than 1 snack)
+        // Condition B: Extra Snack (More than 1 snack unit)
         if (count > 1) {
             extraSnackList.push(empId);
         }

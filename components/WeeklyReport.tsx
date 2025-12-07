@@ -6,10 +6,18 @@ import { FileText, Calendar, Sparkles, Coffee, Cookie, Plus, Minus, ChevronDown,
 import { generateWeeklyInsight } from '../services/geminiService';
 import { TallyAutomation } from './TallyAutomation';
 
+// Helper: Convert ISO string (possibly UTC) to Local YYYY-MM-DD
+const getLocalYMD = (isoStr: string) => {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    // Adjust for local timezone offset to get the correct "day"
+    const offset = d.getTimezoneOffset() * 60000;
+    const local = new Date(d.getTime() - offset);
+    return local.toISOString().split('T')[0];
+};
+
 export const WeeklyReport: React.FC = () => {
   const [loading, setLoading] = useState(true);
-  
-  // Track which specific employee is currently saving to DB
   const [savingEmpId, setSavingEmpId] = useState<string | null>(null);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -20,33 +28,30 @@ export const WeeklyReport: React.FC = () => {
   const [aiInsight, setAiInsight] = useState<string>('');
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
   
-  // Calculated State
   const [companyBillRows, setCompanyBillRows] = useState<DailyCompanyBill[]>([]);
   const [employeeBills, setEmployeeBills] = useState<EmployeeBill[]>([]);
   const [dailyGroupedLogs, setDailyGroupedLogs] = useState<Record<string, Consumption[]>>({});
   
-  // Financial Totals
   const [totalManualTransfer, setTotalManualTransfer] = useState(0);
   const [grandTotalCompany, setGrandTotalCompany] = useState(0);
 
-  // STORAGE STATE: The committed adjustments from DB { "YYYY-MM-DD": { empId: count } }
   const [storedDailyAdjustments, setStoredDailyAdjustments] = useState<Record<string, Record<string, number>>>({});
-
-  // LOCAL STATE: Temporary unsaved changes for TODAY { empId: newCount }
   const [draftAdjustments, setDraftAdjustments] = useState<Record<string, number>>({});
-
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
 
   useEffect(() => {
+    // Calculate Default Week Range (Mon-Sun)
     const curr = new Date(); 
-    const first = curr.getDate() - curr.getDay() + 1; 
-    const last = first + 6; 
-
-    const firstday = new Date(curr.setDate(first)).toISOString().split('T')[0];
-    const lastday = new Date(curr.setDate(last)).toISOString().split('T')[0];
+    const day = curr.getDay() || 7; 
+    if (day !== 1) curr.setHours(-24 * (day - 1));
     
-    setStartDate(firstday);
-    setEndDate(lastday);
+    const firstDate = new Date(curr);
+    const lastDate = new Date(curr);
+    lastDate.setDate(lastDate.getDate() + 6); 
+
+    // Use Local Date Strings for Input Values
+    setStartDate(getLocalYMD(firstDate.toISOString()));
+    setEndDate(getLocalYMD(lastDate.toISOString()));
 
     initData();
   }, []);
@@ -65,18 +70,13 @@ export const WeeklyReport: React.FC = () => {
     setStoredDailyAdjustments(StorageService.getDailyAdjustments());
   };
 
-  // --- Real-time Calculation Logic ---
-  // Merge Stored Data with Local Drafts to show "What-If" results immediately
   const effectiveDailyAdjustments = useMemo(() => {
-      const today = new Date().toISOString().split('T')[0];
+      const today = new Date().toISOString().split('T')[0]; // Adjust this if you want local 'today'
+      const todayLocal = getLocalYMD(new Date().toISOString());
+      
       const merged = { ...storedDailyAdjustments };
-      
-      // Get today's stored data or empty object
-      const todayStored = merged[today] || {};
-      
-      // Merge with drafts: drafts override stored values
-      merged[today] = { ...todayStored, ...draftAdjustments };
-      
+      const todayStored = merged[todayLocal] || {}; // Use local date key
+      merged[todayLocal] = { ...todayStored, ...draftAdjustments };
       return merged;
   }, [storedDailyAdjustments, draftAdjustments]);
 
@@ -87,14 +87,15 @@ export const WeeklyReport: React.FC = () => {
   const calculateReport = (adjustmentsMap: Record<string, Record<string, number>>) => {
     if (!startDate || !endDate) return;
     
+    // Filter Data using LOCAL DATE comparison
     const filteredConsumptions = consumptions.filter(c => {
-        const cDate = c.date.split('T')[0];
+        const cDate = getLocalYMD(c.date); // Use local date helper
         return cDate >= startDate && cDate <= endDate;
     });
 
     const grouped: Record<string, Consumption[]> = {};
     filteredConsumptions.forEach(c => {
-        const dateKey = c.date.split('T')[0];
+        const dateKey = getLocalYMD(c.date); // Group by local date
         if (!grouped[dateKey]) grouped[dateKey] = [];
         grouped[dateKey].push(c);
     });
@@ -126,39 +127,28 @@ export const WeeklyReport: React.FC = () => {
       }
   };
 
-  // --- Handlers ---
-
   const handleDraftChange = (empId: string, delta: number, currentCount: number) => {
       const newCount = currentCount + delta;
-      // Update local draft only
-      setDraftAdjustments(prev => ({
-          ...prev,
-          [empId]: newCount
-      }));
+      setDraftAdjustments(prev => ({ ...prev, [empId]: newCount }));
   };
 
   const handleSaveAdjustment = async (empId: string) => {
       if (savingEmpId) return;
-      const today = new Date().toISOString().split('T')[0];
+      const todayLocal = getLocalYMD(new Date().toISOString()); // Use local date
       const newCount = draftAdjustments[empId];
       
       if (newCount === undefined) return;
 
       setSavingEmpId(empId);
       try {
-          // 1. Prepare full object for storage
           const allAdjustments = StorageService.getDailyAdjustments();
-          if (!allAdjustments[today]) allAdjustments[today] = {};
+          if (!allAdjustments[todayLocal]) allAdjustments[todayLocal] = {};
           
-          allAdjustments[today][empId] = newCount;
+          allAdjustments[todayLocal][empId] = newCount;
 
-          // 2. Async Save
           await StorageService.saveDailyAdjustments(allAdjustments);
-
-          // 3. Update 'Stored' state to match DB
           setStoredDailyAdjustments(allAdjustments);
           
-          // 4. Clear 'Draft' state (since it's now saved)
           setDraftAdjustments(prev => {
               const next = { ...prev };
               delete next[empId];
@@ -174,7 +164,6 @@ export const WeeklyReport: React.FC = () => {
   };
 
   const handleCancelAdjustment = (empId: string) => {
-      // Remove from draft, reverting UI to stored value
       setDraftAdjustments(prev => {
           const next = { ...prev };
           delete next[empId];
@@ -182,7 +171,6 @@ export const WeeklyReport: React.FC = () => {
       });
   };
 
-  // --- Helpers ---
   const toggleRow = (date: string) => {
       if (expandedDate === date) setExpandedDate(null);
       else setExpandedDate(date);
@@ -191,9 +179,10 @@ export const WeeklyReport: React.FC = () => {
   const getAggregatedItemString = (items: Consumption[]) => {
       const counts: Record<string, {count: number, total: number}> = {};
       items.forEach(i => {
+          const qty = i.quantity || 1;
           if (!counts[i.itemName]) counts[i.itemName] = { count: 0, total: 0 };
-          counts[i.itemName].count += 1;
-          counts[i.itemName].total += i.price;
+          counts[i.itemName].count += qty;
+          counts[i.itemName].total += (i.price * qty);
       });
       return Object.entries(counts)
         .map(([name, data]) => `${name}${data.count > 1 ? ` x${data.count}` : ''}`)
@@ -206,8 +195,9 @@ export const WeeklyReport: React.FC = () => {
       const counts: Record<string, {count: number, price: number}> = {};
       
       drinks.forEach(d => {
+          const qty = d.quantity || 1;
           if (!counts[d.itemName]) counts[d.itemName] = { count: 0, price: d.price };
-          counts[d.itemName].count++;
+          counts[d.itemName].count += qty;
       });
 
       return Object.entries(counts).map(([name, data]) => ({
@@ -216,8 +206,6 @@ export const WeeklyReport: React.FC = () => {
           total: data.count * data.price
       }));
   };
-
-  const sortedDates = Object.keys(dailyGroupedLogs).sort();
 
   if (loading) {
       return <div className="flex h-64 justify-center items-center"><Loader2 className="w-8 h-8 animate-spin text-tea-600"/></div>;
@@ -376,15 +364,16 @@ export const WeeklyReport: React.FC = () => {
                           </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
-                          {sortedDates.length === 0 ? (
+                          {companyBillRows.length === 0 ? (
                               <tr><td colSpan={6} className="p-6 text-center text-gray-400">No activity logged.</td></tr>
                           ) : (
-                              sortedDates.reverse().map(date => {
-                                  const logs = dailyGroupedLogs[date];
+                              companyBillRows.slice().reverse().map(row => {
+                                  const date = row.date;
+                                  const logs = dailyGroupedLogs[date] || [];
                                   const drinkConsumers = new Set(logs.filter(l => l.itemType === 'drink').map(l => l.employeeId));
                                   const snackCounts: Record<string, number> = {};
                                   logs.filter(l => l.itemType === 'snack').forEach(l => {
-                                      snackCounts[l.employeeId] = (snackCounts[l.employeeId] || 0) + 1;
+                                      snackCounts[l.employeeId] = (snackCounts[l.employeeId] || 0) + (l.quantity || 1);
                                   });
                                   
                                   const snackOnly = Object.keys(snackCounts).filter(id => !drinkConsumers.has(id)).length;
