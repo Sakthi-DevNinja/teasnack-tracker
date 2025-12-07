@@ -537,7 +537,7 @@ export const WeeklyReport: React.FC = () => {
       </div>
 
       {/* AI Insight Section */}
-      <div className="mt-8 bg-gradient-to-r from-tea-50 to-white p-6 rounded-xl border border-tea-100">
+      <div className="mt-8 bg-gradient-to-r from-tea-50 to-white p-6 rounded-xl border border-tea-100 hidden">
             <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-semibold text-tea-900 flex items-center gap-2">
                     <Sparkles className="w-5 h-5" />
