@@ -17,30 +17,47 @@ const FALLBACK_ITEMS: Item[] = [
   { id: 'i6', name: 'Vada', price: 10, type: 'snack', isActive: true },
 ];
 
-// In-memory cache
+export type DailyAdjustmentMap = Record<string, Record<string, Record<string, number>>>;
+
 let cache = {
   employees: [] as Employee[],
   items: [] as Item[],
   consumption: [] as Consumption[],
-  dailyAdjustments: {} as Record<string, Record<string, number>>,
+  dailyAdjustments: {} as DailyAdjustmentMap,
   isLoaded: false
 };
 
-// Helper to safely parse dates from Google Sheets
-const safeDate = (val: any): string => {
+// Helper: Ensure we get a consistent YYYY-MM-DD string regardless of input format
+const normalizeDateKey = (val: any): string => {
+    if (!val) return new Date().toISOString().split('T')[0];
+    try {
+        const d = new Date(val);
+        if (isNaN(d.getTime())) return String(val).split('T')[0]; // Fallback to string split
+        // Adjust for timezone offset to prevent UTC shifting the day back
+        const offset = d.getTimezoneOffset() * 60000;
+        const local = new Date(d.getTime() - offset);
+        return local.toISOString().split('T')[0];
+    } catch (e) {
+        return String(val).split('T')[0];
+    }
+};
+
+// Helper: Ensure full ISO string for consumption records, but localized
+const safeISODate = (val: any): string => {
     try {
         if (!val) return new Date().toISOString();
         const d = new Date(val);
         if (isNaN(d.getTime())) return new Date().toISOString();
-        return d.toISOString();
+        // Return ISO string but corrected for local offset (preserving user's "Today")
+        const offset = d.getTimezoneOffset() * 60000;
+        const local = new Date(d.getTime() - offset);
+        return local.toISOString().slice(0, -1); // remove Z
     } catch (e) {
         return new Date().toISOString();
     }
 };
 
 export const StorageService = {
-  
-  // --- Initialization ---
   
   init: async (): Promise<void> => {
     if (cache.isLoaded) return;
@@ -54,15 +71,19 @@ export const StorageService = {
     }
 
     try {
-      // Add cache buster to prevent cached responses
-      const response = await fetch(`${API_URL}?t=${Date.now()}`);
+      const response = await fetch(`${API_URL}?t=${Date.now()}`); // Cache buster
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
       
       const text = await response.text();
 
       if (!text || text.trim() === "undefined" || text.trim() === "") {
-          console.warn("API returned empty response. Using fallback.");
-          throw new Error("Empty response");
+          console.warn("API returned empty response.");
+          if (cache.employees.length === 0) {
+             cache.employees = FALLBACK_EMPLOYEES;
+             cache.items = FALLBACK_ITEMS;
+          }
+          cache.isLoaded = true;
+          return;
       }
 
       let data;
@@ -114,14 +135,22 @@ export const StorageService = {
           itemName: c.itemname || 'Unknown',
           itemType: (c.itemtype || '').toLowerCase().includes('drink') ? 'drink' : 'snack',
           price: Number(c.price) || 0,
-          date: safeDate(c.date),
+          date: safeISODate(c.date),
           quantity: Number(c.quantity) > 0 ? Number(c.quantity) : 1 
         };
       });
 
-      cache.dailyAdjustments = data.dailyAdjustments || {};
+      // Handle Adjustments: Ensure keys are strictly YYYY-MM-DD
+      const rawAdjustments = (typeof data.dailyAdjustments === 'object') ? data.dailyAdjustments : {};
+      cache.dailyAdjustments = {};
+      
+      Object.keys(rawAdjustments).forEach(rawDate => {
+          const cleanDate = normalizeDateKey(rawDate);
+          cache.dailyAdjustments[cleanDate] = rawAdjustments[rawDate];
+      });
+
       cache.isLoaded = true;
-      console.log(`Loaded ${cache.consumption.length} logs.`);
+      console.log(`Loaded ${cache.consumption.length} logs and adjustments for ${Object.keys(cache.dailyAdjustments).length} days.`);
 
     } catch (error) {
       console.error("StorageService Init Error:", error);
@@ -133,14 +162,12 @@ export const StorageService = {
     }
   },
 
-  // --- Getters ---
   getEmployees: (): Employee[] => cache.employees,
   getItems: (): Item[] => cache.items,
   getConsumptions: (): Consumption[] => cache.consumption,
-  getDailyAdjustments: (): Record<string, Record<string, number>> => cache.dailyAdjustments,
+  getDailyAdjustments: (): DailyAdjustmentMap => cache.dailyAdjustments,
   getActiveEmployeesCount: (): number => cache.employees.filter(e => e.isActive).length,
 
-  // --- Actions ---
   addConsumption: async (entry: Consumption) => {
     cache.consumption.push(entry);
     if (API_URL.includes('YOUR_APPS_SCRIPT') || API_URL === '') return;
@@ -186,7 +213,7 @@ export const StorageService = {
     });
   },
 
-  saveDailyAdjustments: async (adjustments: Record<string, Record<string, number>>) => {
+  saveDailyAdjustments: async (adjustments: DailyAdjustmentMap) => {
     cache.dailyAdjustments = adjustments;
     if (API_URL.includes('YOUR_APPS_SCRIPT') || API_URL === '') return;
     await fetch(API_URL, {

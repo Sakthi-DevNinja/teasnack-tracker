@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { StorageService } from '../services/storageService';
+import { StorageService, DailyAdjustmentMap } from '../services/storageService';
 import { BillingService, DailyCompanyBill, EmployeeBill } from '../services/billingService';
 import { Consumption, Employee } from '../types';
 import { FileText, Calendar, Sparkles, Coffee, Cookie, Plus, Minus, ChevronDown, ChevronRight, Info, Loader2, Save, X } from 'lucide-react';
@@ -10,7 +10,6 @@ import { TallyAutomation } from './TallyAutomation';
 const getLocalYMD = (isoStr: string) => {
     if (!isoStr) return '';
     const d = new Date(isoStr);
-    // Adjust for local timezone offset to get the correct "day"
     const offset = d.getTimezoneOffset() * 60000;
     const local = new Date(d.getTime() - offset);
     return local.toISOString().split('T')[0];
@@ -35,12 +34,11 @@ export const WeeklyReport: React.FC = () => {
   const [totalManualTransfer, setTotalManualTransfer] = useState(0);
   const [grandTotalCompany, setGrandTotalCompany] = useState(0);
 
-  const [storedDailyAdjustments, setStoredDailyAdjustments] = useState<Record<string, Record<string, number>>>({});
-  const [draftAdjustments, setDraftAdjustments] = useState<Record<string, number>>({});
+  const [storedDailyAdjustments, setStoredDailyAdjustments] = useState<DailyAdjustmentMap>({});
+  const [draftAdjustments, setDraftAdjustments] = useState<Record<string, Record<string, number>>>({});
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
 
   useEffect(() => {
-    // Calculate Default Week Range (Mon-Sun)
     const curr = new Date(); 
     const day = curr.getDay() || 7; 
     if (day !== 1) curr.setHours(-24 * (day - 1));
@@ -49,7 +47,6 @@ export const WeeklyReport: React.FC = () => {
     const lastDate = new Date(curr);
     lastDate.setDate(lastDate.getDate() + 6); 
 
-    // Use Local Date Strings for Input Values
     setStartDate(getLocalYMD(firstDate.toISOString()));
     setEndDate(getLocalYMD(lastDate.toISOString()));
 
@@ -67,16 +64,45 @@ export const WeeklyReport: React.FC = () => {
     setEmployees(StorageService.getEmployees());
     setConsumptions(StorageService.getConsumptions());
     setActiveEmployeeCount(StorageService.getActiveEmployeesCount());
-    setStoredDailyAdjustments(StorageService.getDailyAdjustments());
+    
+    const stored = StorageService.getDailyAdjustments();
+    setStoredDailyAdjustments(stored);
+    
+    // Sync drafts with stored values so visual state is correct on load
+    const todayLocal = getLocalYMD(new Date().toISOString());
+    if (stored[todayLocal]) {
+        setDraftAdjustments(prev => ({
+            ...prev,
+            ...JSON.parse(JSON.stringify(stored[todayLocal]))
+        }));
+    }
+  };
+
+  const isDirty = (empId: string) => {
+      const todayLocal = getLocalYMD(new Date().toISOString());
+      const currentDraft = draftAdjustments[empId] || {};
+      const currentStored = storedDailyAdjustments[todayLocal]?.[empId] || {};
+
+      const allKeys = new Set([...Object.keys(currentDraft), ...Object.keys(currentStored)]);
+      for (let key of allKeys) {
+          const draftVal = currentDraft[key] || 0;
+          const storedVal = currentStored[key] || 0;
+          if (draftVal !== storedVal) return true;
+      }
+      return false;
   };
 
   const effectiveDailyAdjustments = useMemo(() => {
-      const today = new Date().toISOString().split('T')[0]; // Adjust this if you want local 'today'
       const todayLocal = getLocalYMD(new Date().toISOString());
+      const merged: DailyAdjustmentMap = JSON.parse(JSON.stringify(storedDailyAdjustments));
       
-      const merged = { ...storedDailyAdjustments };
-      const todayStored = merged[todayLocal] || {}; // Use local date key
-      merged[todayLocal] = { ...todayStored, ...draftAdjustments };
+      if (!merged[todayLocal]) merged[todayLocal] = {};
+
+      Object.keys(draftAdjustments).forEach(empId => {
+          const empDrafts = draftAdjustments[empId];
+          merged[todayLocal][empId] = { ...merged[todayLocal][empId], ...empDrafts };
+      });
+
       return merged;
   }, [storedDailyAdjustments, draftAdjustments]);
 
@@ -84,18 +110,17 @@ export const WeeklyReport: React.FC = () => {
       calculateReport(effectiveDailyAdjustments);
   }, [startDate, endDate, consumptions, employees, effectiveDailyAdjustments]);
 
-  const calculateReport = (adjustmentsMap: Record<string, Record<string, number>>) => {
+  const calculateReport = (adjustmentsMap: DailyAdjustmentMap) => {
     if (!startDate || !endDate) return;
     
-    // Filter Data using LOCAL DATE comparison
     const filteredConsumptions = consumptions.filter(c => {
-        const cDate = getLocalYMD(c.date); // Use local date helper
+        const cDate = getLocalYMD(c.date);
         return cDate >= startDate && cDate <= endDate;
     });
 
     const grouped: Record<string, Consumption[]> = {};
     filteredConsumptions.forEach(c => {
-        const dateKey = getLocalYMD(c.date); // Group by local date
+        const dateKey = getLocalYMD(c.date);
         if (!grouped[dateKey]) grouped[dateKey] = [];
         grouped[dateKey].push(c);
     });
@@ -127,33 +152,53 @@ export const WeeklyReport: React.FC = () => {
       }
   };
 
-  const handleDraftChange = (empId: string, delta: number, currentCount: number) => {
-      const newCount = currentCount + delta;
-      setDraftAdjustments(prev => ({ ...prev, [empId]: newCount }));
+  const handleDraftChange = (empId: string, itemId: string, delta: number, maxQty: number) => {
+      setDraftAdjustments(prev => {
+          const empDrafts = { ...(prev[empId] || {}) };
+          
+          // Get correct current state from draft or stored
+          const currentDraftVal = empDrafts[itemId];
+          const todayLocal = getLocalYMD(new Date().toISOString());
+          const currentStoredVal = storedDailyAdjustments[todayLocal]?.[empId]?.[itemId] || 0;
+          
+          const baseVal = currentDraftVal !== undefined ? currentDraftVal : currentStoredVal;
+
+          let newVal = baseVal + delta;
+          if (newVal < 0) newVal = 0;
+          if (newVal > maxQty) newVal = maxQty;
+
+          return {
+              ...prev,
+              [empId]: {
+                  ...empDrafts,
+                  [itemId]: newVal
+              }
+          };
+      });
   };
 
   const handleSaveAdjustment = async (empId: string) => {
       if (savingEmpId) return;
-      const todayLocal = getLocalYMD(new Date().toISOString()); // Use local date
-      const newCount = draftAdjustments[empId];
+      const todayLocal = getLocalYMD(new Date().toISOString());
       
-      if (newCount === undefined) return;
+      const empDrafts = draftAdjustments[empId];
+      if (!empDrafts) return;
 
       setSavingEmpId(empId);
       try {
           const allAdjustments = StorageService.getDailyAdjustments();
           if (!allAdjustments[todayLocal]) allAdjustments[todayLocal] = {};
-          
-          allAdjustments[todayLocal][empId] = newCount;
+          if (!allAdjustments[todayLocal][empId]) allAdjustments[todayLocal][empId] = {};
+
+          Object.keys(empDrafts).forEach(itemId => {
+              allAdjustments[todayLocal][empId][itemId] = empDrafts[itemId];
+          });
 
           await StorageService.saveDailyAdjustments(allAdjustments);
           setStoredDailyAdjustments(allAdjustments);
           
-          setDraftAdjustments(prev => {
-              const next = { ...prev };
-              delete next[empId];
-              return next;
-          });
+          // DO NOT CLEAR DRAFT HERE - keeps UI in sync with the new values
+          // The isDirty check will naturally return false now since stored == draft
 
       } catch (error) {
           console.error("Failed to save", error);
@@ -164,6 +209,7 @@ export const WeeklyReport: React.FC = () => {
   };
 
   const handleCancelAdjustment = (empId: string) => {
+      // Revert draft to stored value by removing draft entry for this employee
       setDraftAdjustments(prev => {
           const next = { ...prev };
           delete next[empId];
@@ -205,6 +251,19 @@ export const WeeklyReport: React.FC = () => {
           count: data.count,
           total: data.count * data.price
       }));
+  };
+
+  const getTodaySnackItems = (empId: string) => {
+      const todayLocal = getLocalYMD(new Date().toISOString());
+      const logs = dailyGroupedLogs[todayLocal] || [];
+      const mySnacks = logs.filter(l => l.itemType === 'snack' && l.employeeId === empId);
+      
+      const aggregated: Record<string, { name: string, totalQty: number }> = {};
+      mySnacks.forEach(s => {
+          if (!aggregated[s.itemId]) aggregated[s.itemId] = { name: s.itemName, totalQty: 0 };
+          aggregated[s.itemId].totalQty += (s.quantity || 1);
+      });
+      return Object.entries(aggregated).map(([itemId, data]) => ({ itemId, ...data }));
   };
 
   if (loading) {
@@ -264,12 +323,13 @@ export const WeeklyReport: React.FC = () => {
                             <th className="p-4 font-semibold">Date</th>
                             <th className="p-4 font-semibold text-center">Total Staff</th>
                             <th className="p-4 font-semibold text-center">Drinks</th>
+                            <th className="p-4 font-semibold text-center">Manual Added</th>
                             <th className="p-4 font-semibold text-right">Daily Total (₹)</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                         {companyBillRows.length === 0 ? (
-                             <tr><td colSpan={5} className="p-8 text-center text-gray-400">No data available.</td></tr>
+                             <tr><td colSpan={6} className="p-8 text-center text-gray-400">No data available.</td></tr>
                         ) : (
                             companyBillRows.map((row) => (
                                 <React.Fragment key={row.date}>
@@ -285,13 +345,20 @@ export const WeeklyReport: React.FC = () => {
                                         </td>
                                         <td className="p-4 text-center text-gray-600">{row.totalStaff}</td>
                                         <td className="p-4 text-center text-blue-600 font-medium">{row.actualDrinkCount}</td>
+                                        <td className="p-4 text-center">
+                                            {row.manualAddedCount > 0 ? (
+                                                <span className="bg-orange-100 text-orange-700 text-xs px-2 py-1 rounded-full font-bold">
+                                                    +{row.manualAddedCount} Items
+                                                </span>
+                                            ) : <span className="text-gray-300">-</span>}
+                                        </td>
                                         <td className="p-4 text-right font-bold text-gray-800">
-                                            ₹{row.amount}
+                                            ₹{row.totalDailyCost}
                                         </td>
                                     </tr>
                                     {expandedDate === row.date && (
                                         <tr className="bg-gray-50 animate-fade-in">
-                                            <td colSpan={5} className="p-4 pl-12">
+                                            <td colSpan={6} className="p-4 pl-12">
                                                 <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm max-w-md">
                                                     <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Detailed Breakdown</h4>
                                                     <div className="space-y-1">
@@ -315,7 +382,7 @@ export const WeeklyReport: React.FC = () => {
                         <tfoot className="bg-gray-50 font-bold text-gray-800">
                             {totalManualTransfer !== 0 && (
                                 <tr className="bg-orange-50 text-orange-800">
-                                    <td className="p-4" colSpan={4}>
+                                    <td className="p-4" colSpan={5}>
                                         <span className="flex items-center gap-2 text-sm font-semibold justify-end">
                                             <Cookie className="w-4 h-4" />
                                             Manual Adjustments from Employee Snacks:
@@ -327,7 +394,7 @@ export const WeeklyReport: React.FC = () => {
                                 </tr>
                             )}
                             <tr className="border-t-2 border-tea-200 bg-tea-50">
-                                <td className="p-4" colSpan={2}>Total</td>
+                                <td className="p-4" colSpan={3}>Total</td>
                                 <td colSpan={2} className="p-4 text-right pr-8 text-gray-500 text-xs uppercase tracking-wide">Grand Total</td>
                                 <td className="p-4 text-right text-xl text-tea-700 font-extrabold">
                                     ₹{grandTotalCompany}
@@ -360,7 +427,7 @@ export const WeeklyReport: React.FC = () => {
                               <th className="p-3 text-center">Actual Drinks</th>
                               <th className="p-3 text-center">Snack-Only (Avail)</th>
                               <th className="p-3 text-center">Extra Snacks (Avail)</th>
-                              <th className="p-3 text-center">Fillers Used</th>
+                              <th className="p-3 text-center">Manual Moves</th>
                           </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
@@ -373,7 +440,8 @@ export const WeeklyReport: React.FC = () => {
                                   const drinkConsumers = new Set(logs.filter(l => l.itemType === 'drink').map(l => l.employeeId));
                                   const snackCounts: Record<string, number> = {};
                                   logs.filter(l => l.itemType === 'snack').forEach(l => {
-                                      snackCounts[l.employeeId] = (snackCounts[l.employeeId] || 0) + (l.quantity || 1);
+                                      const qty = l.quantity || 1;
+                                      snackCounts[l.employeeId] = (snackCounts[l.employeeId] || 0) + qty;
                                   });
                                   
                                   const snackOnly = Object.keys(snackCounts).filter(id => !drinkConsumers.has(id)).length;
@@ -388,7 +456,9 @@ export const WeeklyReport: React.FC = () => {
                                           <td className="p-3 text-center text-blue-600 font-bold">{drinkConsumers.size}</td>
                                           <td className="p-3 text-center text-orange-600">{snackOnly}</td>
                                           <td className="p-3 text-center text-purple-600">{extraSnacks}</td>
-                                          <td className="p-3 text-center text-gray-400">-</td>
+                                          <td className="p-3 text-center text-gray-700 font-bold bg-gray-50">
+                                              {row.manualAddedCount > 0 ? `+${row.manualAddedCount}` : '-'}
+                                          </td>
                                       </tr>
                                   );
                               })
@@ -413,7 +483,7 @@ export const WeeklyReport: React.FC = () => {
                         <tr className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wider">
                             <th className="p-4 font-semibold">Employee</th>
                             <th className="p-4 font-semibold">Items</th>
-                            <th className="p-4 font-semibold text-center w-48">Adjust (Today)</th>
+                            <th className="p-4 font-semibold text-center w-64">Adjust (Today)</th>
                             <th className="p-4 font-semibold text-center">Net Count</th>
                             <th className="p-4 font-semibold text-right">Amount</th>
                             <th className="p-4 font-semibold text-right">Revised Amount</th>
@@ -424,8 +494,9 @@ export const WeeklyReport: React.FC = () => {
                             <tr><td colSpan={6} className="p-8 text-center text-gray-400">No personal snack expenses.</td></tr>
                         ) : (
                             employeeBills.map((bill) => {
-                                const hasDraft = draftAdjustments[bill.employee.id] !== undefined;
+                                const hasChanges = isDirty(bill.employee.id);
                                 const isSaving = savingEmpId === bill.employee.id;
+                                const todaySnacks = getTodaySnackItems(bill.employee.id);
                                 
                                 return (
                                 <tr key={bill.employee.id} className="hover:bg-gray-50 transition-colors">
@@ -437,43 +508,62 @@ export const WeeklyReport: React.FC = () => {
                                             {getAggregatedItemString(bill.items)}
                                         </div>
                                     </td>
-                                    {/* Manual Adjustment Column (Controls for TODAY only) */}
+                                    
+                                    {/* Manual Adjustment Column (Item Specific) */}
                                     <td className="p-4 text-center">
                                         {isSaving ? (
                                             <div className="flex justify-center p-2">
                                                 <Loader2 className="w-5 h-5 animate-spin text-tea-600" />
                                             </div>
                                         ) : (
-                                            <div className="flex flex-col items-center gap-1">
-                                                <div className={`flex items-center justify-center gap-2 rounded-lg p-1 w-fit mx-auto transition-colors ${hasDraft ? 'bg-blue-50 ring-1 ring-blue-200' : 'bg-gray-100'}`}>
-                                                    <button 
-                                                        onClick={() => handleDraftChange(bill.employee.id, -1, bill.todayAdjustmentCount)}
-                                                        disabled={!bill.canDecreaseAdjustment}
-                                                        className={`p-1 rounded ${!bill.canDecreaseAdjustment ? 'text-gray-300' : 'text-gray-600 hover:bg-white hover:shadow-sm'}`}
-                                                    >
-                                                        <Minus className="w-3 h-3" />
-                                                    </button>
-                                                    <span className={`text-xs font-mono font-bold w-6 text-center ${hasDraft ? 'text-blue-600' : 'text-tea-700'}`}>
-                                                        {bill.todayAdjustmentCount}
-                                                    </span>
-                                                    <button 
-                                                        onClick={() => handleDraftChange(bill.employee.id, 1, bill.todayAdjustmentCount)}
-                                                        disabled={!bill.canIncreaseAdjustment}
-                                                        className={`p-1 rounded ${!bill.canIncreaseAdjustment ? 'text-gray-300' : 'text-gray-600 hover:bg-white hover:shadow-sm'}`}
-                                                    >
-                                                        <Plus className="w-3 h-3" />
-                                                    </button>
-                                                </div>
+                                            <div className="flex flex-col items-center gap-2">
+                                                {todaySnacks.length === 0 ? (
+                                                    <span className="text-xs text-gray-300">-</span>
+                                                ) : (
+                                                    todaySnacks.map(item => {
+                                                        const currentDraft = draftAdjustments[bill.employee.id]?.[item.itemId];
+                                                        const currentStored = bill.todayAdjustmentMap[item.itemId] || 0;
+                                                        const displayVal = currentDraft !== undefined ? currentDraft : currentStored;
+                                                        const isModified = currentDraft !== undefined && currentDraft !== currentStored;
+                                                        const isAdjusted = displayVal > 0;
+
+                                                        return (
+                                                            <div key={item.itemId} className={`flex items-center justify-between w-full rounded p-1 text-xs ${isAdjusted ? 'bg-green-50 ring-1 ring-green-100' : 'bg-gray-50'}`}>
+                                                                <div className="flex flex-col items-start mr-2">
+                                                                    <span className="text-gray-600 truncate max-w-[60px]" title={item.name}>{item.name}</span>
+                                                                    {isAdjusted && <span className="text-[9px] text-green-600 font-bold">{displayVal} to Co.</span>}
+                                                                </div>
+                                                                <div className={`flex items-center gap-1 ${isModified ? 'bg-blue-50 ring-1 ring-blue-100 rounded' : ''}`}>
+                                                                    <button 
+                                                                        onClick={() => handleDraftChange(bill.employee.id, item.itemId, -1, item.totalQty)}
+                                                                        className="w-5 h-5 flex items-center justify-center bg-white border border-gray-200 rounded hover:bg-gray-100 text-gray-600"
+                                                                        disabled={displayVal <= 0}
+                                                                    >
+                                                                        <Minus className="w-3 h-3" />
+                                                                    </button>
+                                                                    <span className={`w-4 text-center font-bold ${isModified ? 'text-blue-600' : (isAdjusted ? 'text-green-700' : 'text-gray-700')}`}>{displayVal}</span>
+                                                                    <button 
+                                                                        onClick={() => handleDraftChange(bill.employee.id, item.itemId, 1, item.totalQty)}
+                                                                        className="w-5 h-5 flex items-center justify-center bg-white border border-gray-200 rounded hover:bg-gray-100 text-gray-600"
+                                                                        disabled={displayVal >= item.totalQty}
+                                                                    >
+                                                                        <Plus className="w-3 h-3" />
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })
+                                                )}
                                                 
-                                                {/* Action Buttons: Only show if draft exists */}
-                                                {hasDraft && (
-                                                    <div className="flex gap-2 animate-fade-in mt-1">
+                                                {/* Action Buttons: Only show if ANY change exists for this user */}
+                                                {hasChanges && (
+                                                    <div className="flex gap-2 animate-fade-in mt-1 w-full justify-center">
                                                         <button 
                                                             onClick={() => handleSaveAdjustment(bill.employee.id)}
-                                                            className="bg-blue-600 text-white p-1 rounded hover:bg-blue-700 shadow-sm"
-                                                            title="Save"
+                                                            className="flex-1 bg-blue-600 text-white p-1 rounded hover:bg-blue-700 shadow-sm flex justify-center items-center text-xs gap-1"
+                                                            title="Save All"
                                                         >
-                                                            <Save className="w-3 h-3" />
+                                                            <Save className="w-3 h-3" /> Save
                                                         </button>
                                                         <button 
                                                             onClick={() => handleCancelAdjustment(bill.employee.id)}
@@ -482,13 +572,6 @@ export const WeeklyReport: React.FC = () => {
                                                         >
                                                             <X className="w-3 h-3" />
                                                         </button>
-                                                    </div>
-                                                )}
-
-                                                {/* Optional Hint about historical adjustments */}
-                                                {!hasDraft && bill.totalDeductedCount > bill.todayAdjustmentCount && (
-                                                    <div className="text-[10px] text-gray-400">
-                                                        (Hist: {bill.totalDeductedCount - bill.todayAdjustmentCount})
                                                     </div>
                                                 )}
                                             </div>

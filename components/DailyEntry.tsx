@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { StorageService } from '../services/storageService';
 import { Employee, Item, Consumption } from '../types';
@@ -10,13 +11,12 @@ interface SnackSlot {
   quantity: number;
 }
 
-// Helper: Convert ISO string to Local YYYY-MM-DD
-const getLocalYMD = (isoStr: string) => {
-    if (!isoStr) return '';
-    const d = new Date(isoStr);
-    const offset = d.getTimezoneOffset() * 60000;
-    const local = new Date(d.getTime() - offset);
-    return local.toISOString().split('T')[0];
+// Helper: Get Local Date String YYYY-MM-DD
+const getLocalYMD = (val: string | Date) => {
+    if (!val) return '';
+    // If it's a string like "2023-10-28T10:00:00", just take the first part
+    if (typeof val === 'string') return val.split('T')[0];
+    return val.getFullYear() + '-' + String(val.getMonth() + 1).padStart(2, '0') + '-' + String(val.getDate()).padStart(2, '0');
 };
 
 export const DailyEntry: React.FC = () => {
@@ -58,9 +58,9 @@ export const DailyEntry: React.FC = () => {
   };
 
   const refreshLogs = () => {
-    const todayLocal = getLocalYMD(new Date().toISOString());
+    const todayLocal = getLocalYMD(new Date());
     const allLogs = StorageService.getConsumptions();
-    // Filter using local date comparison
+    // Filter using simple string comparison for robust local date matching
     const todaysLogs = allLogs.filter(log => getLocalYMD(log.date) === todayLocal);
     setRecentLog(todaysLogs);
   };
@@ -192,7 +192,12 @@ export const DailyEntry: React.FC = () => {
 
         // 2. Prepare NEW entries
         const newEntries: Consumption[] = [];
-        const timestamp = new Date().toISOString(); 
+        
+        // Generate LOCAL timestamp format (YYYY-MM-DDTHH:mm:ss.sss)
+        // This prevents the "Previous Day" bug caused by UTC conversion
+        const now = new Date();
+        const offset = now.getTimezoneOffset() * 60000;
+        const localTimestamp = new Date(now.getTime() - offset).toISOString().slice(0, -1); 
 
         // CALCULATE SEQUENTIAL ID START POINT
         const allLogs = StorageService.getConsumptions();
@@ -206,7 +211,8 @@ export const DailyEntry: React.FC = () => {
         }, 0);
 
         const createEntry = (itemId: string, price: number, qty: number, type: 'drink' | 'snack'): Consumption => {
-            currentMaxId++;
+            // FIX: Using += 1 instead of ++ to be safe
+            currentMaxId += 1;
             const item = items.find(i => i.id === itemId);
             return {
                 id: `c${currentMaxId}`,
@@ -215,8 +221,8 @@ export const DailyEntry: React.FC = () => {
                 itemName: item ? item.name : 'Unknown',
                 itemType: type,
                 price: price,
-                date: timestamp,
-                quantity: qty // Send quantity directly
+                date: localTimestamp, // Store Local Time
+                quantity: qty 
             };
         };
 

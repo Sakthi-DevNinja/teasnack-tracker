@@ -9,7 +9,7 @@ export const generateWeeklyInsight = async (
   items: Item[],
   tallyResults: TallyResult[]
 ): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey8: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const summaryData = {
     totalConsumptionCount: consumptions.length,

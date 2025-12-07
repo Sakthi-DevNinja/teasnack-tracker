@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DailyEntry } from './components/DailyEntry';
 import { WeeklyReport } from './components/WeeklyReport';
 import { BillGenerator } from './components/BillGenerator';
@@ -78,7 +78,7 @@ const App: React.FC = () => {
       </main>
       
       <footer className="max-w-5xl mx-auto px-6 py-8 text-center text-gray-400 text-sm print:hidden">
-        <p>&copy; {new Date().getFullYear()} teadesk. Designed with care.</p>
+        <p>&copy; {new Date().getFullYear()} teadesk. Built with React & Tailwind.</p>
       </footer>
     </div>
   );
