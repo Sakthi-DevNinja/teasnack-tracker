@@ -78,7 +78,7 @@ const App: React.FC = () => {
       </main>
       
       <footer className="max-w-5xl mx-auto px-6 py-8 text-center text-gray-400 text-sm print:hidden">
-        <p>&copy; {new Date().getFullYear()} teadesk. Built with React & Tailwind.</p>
+        <p>&copy; {new Date().getFullYear()} Tea<span className="text-tea-600">Desk</span>. Designed with care.</p>
       </footer>
     </div>
   );
