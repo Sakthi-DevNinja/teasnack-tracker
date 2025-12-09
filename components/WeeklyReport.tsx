@@ -84,12 +84,17 @@ export const WeeklyReport: React.FC = () => {
   // Helper to check if adjustments are pending specifically for the SELECTED adjustment date
   const isDirty = (empId: string) => {
       if (!adjustmentDate) return false;
-      const currentDraft = draftAdjustments[empId] || {};
+      
+      const currentDraft = draftAdjustments[empId];
+      // If no draft entry exists for this user, it means nothing has been touched/modified since last save
+      if (!currentDraft) return false;
+
       const currentStored = storedDailyAdjustments[adjustmentDate]?.[empId] || {};
 
-      const allKeys = new Set([...Object.keys(currentDraft), ...Object.keys(currentStored)]);
-      for (let key of allKeys) {
-          const draftVal = currentDraft[key] || 0;
+      // Only iterate keys present in the draft. 
+      // If a key is missing from draft, it implies it hasn't been modified.
+      for (const key of Object.keys(currentDraft)) {
+          const draftVal = currentDraft[key];
           const storedVal = currentStored[key] || 0;
           if (draftVal !== storedVal) return true;
       }
@@ -331,7 +336,7 @@ export const WeeklyReport: React.FC = () => {
                             <th className="p-4 font-semibold w-8"></th>
                             <th className="p-4 font-semibold">Date</th>
                             <th className="p-4 font-semibold text-center">Total Staff</th>
-                            <th className="p-4 font-semibold text-center text-tea-700">Tea Sessions<br/><span className="text-[10px] text-tea-400 normal-case">AM | PM</span></th>
+                            <th className="p-4 font-semibold text-center text-tea-700">Tea Sessions<br/><span className="text-[10px] text-tea-400 normal-case">AM | PM (Headcount)</span></th>
                             <th className="p-4 font-semibold text-center bg-blue-50 text-blue-800 border-l border-blue-100">Total Cups</th>
                             <th className="p-4 font-semibold text-center">Manual Added</th>
                             <th className="p-4 font-semibold text-right">Daily Total (₹)</th>
@@ -441,11 +446,11 @@ export const WeeklyReport: React.FC = () => {
                       <thead>
                           <tr className="bg-gray-50 text-gray-600 font-semibold border-b border-gray-200 text-xs uppercase tracking-wider">
                               <th className="p-3">Date</th>
-                              <th className="p-3 text-center">Total Staff<br/><span className="text-[10px] text-gray-400 normal-case"></span></th>
-                              <th className="p-3 text-center text-tea-700">Tea Sessions<br/><span className="text-[10px] text-tea-400 normal-case">AM | PM</span></th>
+                              <th className="p-3 text-center">Total Staff<br/><span className="text-[10px] text-gray-400 normal-case">(Headcount)</span></th>
+                              <th className="p-3 text-center text-tea-700">Tea Sessions<br/><span className="text-[10px] text-tea-400 normal-case">AM | PM (Headcount)</span></th>
                               <th className="p-3 text-center bg-blue-50 text-blue-700">Total Cups<br/><span className="text-[10px] text-blue-400 normal-case">(Item Count - drinks)</span></th>
-                              <th className="p-3 text-center">Snack-Only<br/><span className="text-[10px] text-gray-400 normal-case">AM | PM</span></th>
-                              <th className="p-3 text-center">Multi-Snack {'>'} 1 <br/><span className="text-[10px] text-gray-400 normal-case">AM | PM</span></th>
+                              <th className="p-3 text-center">Snack-Only<br/><span className="text-[10px] text-gray-400 normal-case">AM | PM (Sessions)</span></th>
+                              <th className="p-3 text-center">Multi-Snack<br/><span className="text-[10px] text-gray-400 normal-case">AM | PM (Sessions)</span></th>
                               <th className="p-3 text-center">Manual Moves<br/><span className="text-[10px] text-gray-400 normal-case">(Item Count)</span></th>
                           </tr>
                       </thead>
