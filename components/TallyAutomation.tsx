@@ -37,11 +37,11 @@ export const TallyAutomation: React.FC<Props> = ({ billRow }) => {
                   <div className="text-xl font-bold text-gray-800">{billRow.totalStaff}</div>
               </div>
 
-              {/* 2. Actual Drinks */}
+              {/* 2. Staff Taking Tea (Headcount) */}
               <div className="bg-blue-50 rounded-lg p-3 border border-blue-100 flex flex-col justify-center items-center">
-                  <div className="text-xs text-blue-600 mb-1">Actual Drinks</div>
+                  <div className="text-xs text-blue-600 mb-1">Staff Taking Tea</div>
                   <div className="text-xl font-bold text-blue-700">{billRow.actualDrinkCount}</div>
-                  <div className="text-[10px] text-blue-400">₹{billRow.baseDrinkCost}</div>
+                  <div className="text-[10px] text-blue-400">Total Cups: {billRow.totalDrinkCount}</div>
               </div>
 
               {/* 3. Manual Moves */}
@@ -77,7 +77,7 @@ export const TallyAutomation: React.FC<Props> = ({ billRow }) => {
               </div>
               <div className="flex flex-col gap-1">
                   <div className="flex justify-between border-b border-gray-200 pb-1">
-                      <span>Base Drinks Cost:</span>
+                      <span>Base Drinks Cost ({billRow.totalDrinkCount} cups):</span>
                       <span className="font-mono">₹{billRow.baseDrinkCost}</span>
                   </div>
                   <div className="flex justify-between border-b border-gray-200 pb-1">

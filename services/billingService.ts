@@ -4,7 +4,10 @@ import { DailyAdjustmentMap } from './storageService';
 export interface DailyCompanyBill {
   date: string;
   totalStaff: number;
-  actualDrinkCount: number; 
+  actualDrinkCount: number; // Sum of Unique AM Drinkers + Unique PM Drinkers
+  amDrinkCount: number;     // Unique AM Drinkers
+  pmDrinkCount: number;     // Unique PM Drinkers
+  totalDrinkCount: number;  // Total Cups Consumed (Volume)
   
   // Manual/Tally Adjustments
   manualAddedCount: number; 
@@ -95,10 +98,33 @@ export const BillingService = {
       const dailyLogs = groupedByDate[date];
       const expandedLogs = expandConsumptions(dailyLogs);
 
-      // --- Company Bill Base ---
+      // --- Session Logic (AM/PM Split) ---
+      // We split logs based on hour to determine session headcount
+      const amLogs = expandedLogs.filter(l => {
+          const d = new Date(l.date);
+          // If invalid date or no time (legacy data), assume AM
+          if (isNaN(d.getTime())) return true; 
+          return d.getHours() < 13; // Before 1 PM
+      });
+      
+      const pmLogs = expandedLogs.filter(l => {
+          const d = new Date(l.date);
+          if (isNaN(d.getTime())) return false;
+          return d.getHours() >= 13; // 1 PM or later
+      });
+
+      // Calculate Drinkers per session
+      const amDrinkers = new Set(amLogs.filter(c => c.itemType === 'drink').map(c => c.employeeId));
+      const pmDrinkers = new Set(pmLogs.filter(c => c.itemType === 'drink').map(c => c.employeeId));
+
+      const amDrinkCount = amDrinkers.size;
+      const pmDrinkCount = pmDrinkers.size;
+      // NEW: Actual count is AM unique + PM unique
+      const actualDrinkCount = amDrinkCount + pmDrinkCount; 
+      
+      // Calculate totals normally
       const drinkItems = expandedLogs.filter(c => c.itemType === 'drink');
-      const drinkConsumers = new Set(drinkItems.map(c => c.employeeId));
-      const actualDrinkCount = drinkConsumers.size;
+      const totalDrinkCount = drinkItems.length;
       const dailyDrinkCost = drinkItems.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
       
       // Initialize Company Items with Drinks
@@ -106,7 +132,7 @@ export const BillingService = {
       let dailyManualAddedCount = 0;
       let dailyManualAddedCost = 0;
 
-      // --- Employee Deduction Logic ---
+      // --- Employee Deduction Logic (Kept Daily for Manual Adjustment Simplicity) ---
       const snackItemsExpanded = expandedLogs.filter(c => c.itemType === 'snack');
       const dailySnacksByEmp: Record<string, Consumption[]> = {};
       snackItemsExpanded.forEach(s => {
@@ -132,7 +158,7 @@ export const BillingService = {
 
           Object.keys(snacksByItem).forEach(itemId => {
              const items = snacksByItem[itemId];
-             // Adjustment is count of items comp pays for
+             // Adjustment is count of items comp pays for (Manual Override)
              const adjustCount = empAdjustments[itemId] || 0;
              
              for (let i = 0; i < items.length; i++) {
@@ -170,6 +196,9 @@ export const BillingService = {
           date,
           totalStaff: activeEmployeeCount,
           actualDrinkCount: actualDrinkCount,
+          amDrinkCount,
+          pmDrinkCount,
+          totalDrinkCount: totalDrinkCount,
           manualAddedCount: dailyManualAddedCount,
           manualAddedCost: dailyManualAddedCost,
           baseDrinkCost: dailyDrinkCost,

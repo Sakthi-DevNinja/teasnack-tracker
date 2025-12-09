@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { StorageService, DailyAdjustmentMap } from '../services/storageService';
 import { BillingService, DailyCompanyBill, EmployeeBill } from '../services/billingService';
 import { Consumption, Employee } from '../types';
-import { FileText, Calendar, Sparkles, Coffee, Cookie, Plus, Minus, ChevronDown, ChevronRight, Info, Loader2, Save, X } from 'lucide-react';
+import { FileText, Calendar, Sparkles, Coffee, Cookie, Plus, Minus, ChevronDown, ChevronRight, Info, Loader2, Save, X, Edit3 } from 'lucide-react';
 import { generateWeeklyInsight } from '../services/geminiService';
 import { TallyAutomation } from './TallyAutomation';
 
@@ -24,6 +24,10 @@ export const WeeklyReport: React.FC = () => {
   const [activeEmployeeCount, setActiveEmployeeCount] = useState<number>(10);
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
+  
+  // NEW: State to track which date we are currently adjusting
+  const [adjustmentDate, setAdjustmentDate] = useState<string>('');
+
   const [aiInsight, setAiInsight] = useState<string>('');
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
   
@@ -47,8 +51,13 @@ export const WeeklyReport: React.FC = () => {
     const lastDate = new Date(curr);
     lastDate.setDate(lastDate.getDate() + 6); 
 
-    setStartDate(getLocalYMD(firstDate.toISOString()));
-    setEndDate(getLocalYMD(lastDate.toISOString()));
+    const startStr = getLocalYMD(firstDate.toISOString());
+    const endStr = getLocalYMD(lastDate.toISOString());
+    const todayStr = getLocalYMD(new Date().toISOString());
+
+    setStartDate(startStr);
+    setEndDate(endStr);
+    setAdjustmentDate(todayStr); // Default adjustment to today
 
     initData();
   }, []);
@@ -68,20 +77,15 @@ export const WeeklyReport: React.FC = () => {
     const stored = StorageService.getDailyAdjustments();
     setStoredDailyAdjustments(stored);
     
-    // Sync drafts with stored values so visual state is correct on load
-    const todayLocal = getLocalYMD(new Date().toISOString());
-    if (stored[todayLocal]) {
-        setDraftAdjustments(prev => ({
-            ...prev,
-            ...JSON.parse(JSON.stringify(stored[todayLocal]))
-        }));
-    }
+    // Sync drafts: When loading, clear old drafts to avoid confusion across dates
+    setDraftAdjustments({});
   };
 
+  // Helper to check if adjustments are pending specifically for the SELECTED adjustment date
   const isDirty = (empId: string) => {
-      const todayLocal = getLocalYMD(new Date().toISOString());
+      if (!adjustmentDate) return false;
       const currentDraft = draftAdjustments[empId] || {};
-      const currentStored = storedDailyAdjustments[todayLocal]?.[empId] || {};
+      const currentStored = storedDailyAdjustments[adjustmentDate]?.[empId] || {};
 
       const allKeys = new Set([...Object.keys(currentDraft), ...Object.keys(currentStored)]);
       for (let key of allKeys) {
@@ -93,18 +97,20 @@ export const WeeklyReport: React.FC = () => {
   };
 
   const effectiveDailyAdjustments = useMemo(() => {
-      const todayLocal = getLocalYMD(new Date().toISOString());
       const merged: DailyAdjustmentMap = JSON.parse(JSON.stringify(storedDailyAdjustments));
       
-      if (!merged[todayLocal]) merged[todayLocal] = {};
-
-      Object.keys(draftAdjustments).forEach(empId => {
-          const empDrafts = draftAdjustments[empId];
-          merged[todayLocal][empId] = { ...merged[todayLocal][empId], ...empDrafts };
-      });
+      // Merge current drafts into the stored data for calculation preview
+      // Note: We only merge drafts for the currently selected adjustmentDate
+      if (adjustmentDate) {
+          if (!merged[adjustmentDate]) merged[adjustmentDate] = {};
+          Object.keys(draftAdjustments).forEach(empId => {
+              const empDrafts = draftAdjustments[empId];
+              merged[adjustmentDate][empId] = { ...merged[adjustmentDate][empId], ...empDrafts };
+          });
+      }
 
       return merged;
-  }, [storedDailyAdjustments, draftAdjustments]);
+  }, [storedDailyAdjustments, draftAdjustments, adjustmentDate]);
 
   useEffect(() => {
       calculateReport(effectiveDailyAdjustments);
@@ -153,13 +159,14 @@ export const WeeklyReport: React.FC = () => {
   };
 
   const handleDraftChange = (empId: string, itemId: string, delta: number, maxQty: number) => {
+      if (!adjustmentDate) return;
+
       setDraftAdjustments(prev => {
           const empDrafts = { ...(prev[empId] || {}) };
           
-          // Get correct current state from draft or stored
+          // Get correct current state
           const currentDraftVal = empDrafts[itemId];
-          const todayLocal = getLocalYMD(new Date().toISOString());
-          const currentStoredVal = storedDailyAdjustments[todayLocal]?.[empId]?.[itemId] || 0;
+          const currentStoredVal = storedDailyAdjustments[adjustmentDate]?.[empId]?.[itemId] || 0;
           
           const baseVal = currentDraftVal !== undefined ? currentDraftVal : currentStoredVal;
 
@@ -178,8 +185,7 @@ export const WeeklyReport: React.FC = () => {
   };
 
   const handleSaveAdjustment = async (empId: string) => {
-      if (savingEmpId) return;
-      const todayLocal = getLocalYMD(new Date().toISOString());
+      if (savingEmpId || !adjustmentDate) return;
       
       const empDrafts = draftAdjustments[empId];
       if (!empDrafts) return;
@@ -187,18 +193,22 @@ export const WeeklyReport: React.FC = () => {
       setSavingEmpId(empId);
       try {
           const allAdjustments = StorageService.getDailyAdjustments();
-          if (!allAdjustments[todayLocal]) allAdjustments[todayLocal] = {};
-          if (!allAdjustments[todayLocal][empId]) allAdjustments[todayLocal][empId] = {};
+          if (!allAdjustments[adjustmentDate]) allAdjustments[adjustmentDate] = {};
+          if (!allAdjustments[adjustmentDate][empId]) allAdjustments[adjustmentDate][empId] = {};
 
           Object.keys(empDrafts).forEach(itemId => {
-              allAdjustments[todayLocal][empId][itemId] = empDrafts[itemId];
+              allAdjustments[adjustmentDate][empId][itemId] = empDrafts[itemId];
           });
 
           await StorageService.saveDailyAdjustments(allAdjustments);
           setStoredDailyAdjustments(allAdjustments);
           
-          // DO NOT CLEAR DRAFT HERE - keeps UI in sync with the new values
-          // The isDirty check will naturally return false now since stored == draft
+          // Clear draft for this user as it is now saved
+          setDraftAdjustments(prev => {
+              const next = { ...prev };
+              delete next[empId];
+              return next;
+          });
 
       } catch (error) {
           console.error("Failed to save", error);
@@ -209,7 +219,6 @@ export const WeeklyReport: React.FC = () => {
   };
 
   const handleCancelAdjustment = (empId: string) => {
-      // Revert draft to stored value by removing draft entry for this employee
       setDraftAdjustments(prev => {
           const next = { ...prev };
           delete next[empId];
@@ -253,9 +262,9 @@ export const WeeklyReport: React.FC = () => {
       }));
   };
 
-  const getTodaySnackItems = (empId: string) => {
-      const todayLocal = getLocalYMD(new Date().toISOString());
-      const logs = dailyGroupedLogs[todayLocal] || [];
+  const getSnackItemsForAdjustmentDate = (empId: string) => {
+      if (!adjustmentDate) return [];
+      const logs = dailyGroupedLogs[adjustmentDate] || [];
       const mySnacks = logs.filter(l => l.itemType === 'snack' && l.employeeId === empId);
       
       const aggregated: Record<string, { name: string, totalQty: number }> = {};
@@ -322,14 +331,15 @@ export const WeeklyReport: React.FC = () => {
                             <th className="p-4 font-semibold w-8"></th>
                             <th className="p-4 font-semibold">Date</th>
                             <th className="p-4 font-semibold text-center">Total Staff</th>
-                            <th className="p-4 font-semibold text-center">Drinks</th>
+                            <th className="p-4 font-semibold text-center text-tea-700">Tea Sessions<br/><span className="text-[10px] text-tea-400 normal-case">AM | PM</span></th>
+                            <th className="p-4 font-semibold text-center bg-blue-50 text-blue-800 border-l border-blue-100">Total Cups</th>
                             <th className="p-4 font-semibold text-center">Manual Added</th>
                             <th className="p-4 font-semibold text-right">Daily Total (₹)</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                         {companyBillRows.length === 0 ? (
-                             <tr><td colSpan={6} className="p-8 text-center text-gray-400">No data available.</td></tr>
+                             <tr><td colSpan={7} className="p-8 text-center text-gray-400">No data available.</td></tr>
                         ) : (
                             companyBillRows.map((row) => (
                                 <React.Fragment key={row.date}>
@@ -344,7 +354,15 @@ export const WeeklyReport: React.FC = () => {
                                             {new Date(row.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', weekday: 'short' })}
                                         </td>
                                         <td className="p-4 text-center text-gray-600">{row.totalStaff}</td>
-                                        <td className="p-4 text-center text-blue-600 font-medium">{row.actualDrinkCount}</td>
+                                        <td className="p-4 text-center text-tea-600 font-medium">
+                                             <span title="Morning">{row.amDrinkCount}</span>
+                                             <span className="text-gray-300 mx-1">|</span>
+                                             <span title="Afternoon">{row.pmDrinkCount}</span>
+                                        </td>
+                                        <td className="p-4 text-center bg-blue-50 border-l border-blue-100 font-bold text-blue-700">
+                                            {row.totalDrinkCount}
+                                            <span className="text-[10px] text-blue-400 block">Cups</span>
+                                        </td>
                                         <td className="p-4 text-center">
                                             {row.manualAddedCount > 0 ? (
                                                 <span className="bg-orange-100 text-orange-700 text-xs px-2 py-1 rounded-full font-bold">
@@ -358,7 +376,7 @@ export const WeeklyReport: React.FC = () => {
                                     </tr>
                                     {expandedDate === row.date && (
                                         <tr className="bg-gray-50 animate-fade-in">
-                                            <td colSpan={6} className="p-4 pl-12">
+                                            <td colSpan={7} className="p-4 pl-12">
                                                 <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm max-w-md">
                                                     <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Detailed Breakdown</h4>
                                                     <div className="space-y-1">
@@ -382,7 +400,7 @@ export const WeeklyReport: React.FC = () => {
                         <tfoot className="bg-gray-50 font-bold text-gray-800">
                             {totalManualTransfer !== 0 && (
                                 <tr className="bg-orange-50 text-orange-800">
-                                    <td className="p-4" colSpan={5}>
+                                    <td className="p-4" colSpan={6}>
                                         <span className="flex items-center gap-2 text-sm font-semibold justify-end">
                                             <Cookie className="w-4 h-4" />
                                             Manual Adjustments from Employee Snacks:
@@ -395,7 +413,7 @@ export const WeeklyReport: React.FC = () => {
                             )}
                             <tr className="border-t-2 border-tea-200 bg-tea-50">
                                 <td className="p-4" colSpan={3}>Total</td>
-                                <td colSpan={2} className="p-4 text-right pr-8 text-gray-500 text-xs uppercase tracking-wide">Grand Total</td>
+                                <td colSpan={3} className="p-4 text-right pr-8 text-gray-500 text-xs uppercase tracking-wide">Grand Total</td>
                                 <td className="p-4 text-right text-xl text-tea-700 font-extrabold">
                                     ₹{grandTotalCompany}
                                 </td>
@@ -415,37 +433,66 @@ export const WeeklyReport: React.FC = () => {
                     </div>
                     <h3 className="text-lg font-bold text-gray-800">Daily Tally Breakdown</h3>
                   </div>
-                  <span className="text-xs text-gray-400">Auto-filling disabled</span>
+                  <span className="text-xs text-gray-400">Ascending Date Order</span>
               </div>
 
               <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                   <table className="w-full text-left text-sm">
                       <thead>
-                          <tr className="bg-gray-50 text-gray-600 font-semibold border-b border-gray-200">
+                          <tr className="bg-gray-50 text-gray-600 font-semibold border-b border-gray-200 text-xs uppercase tracking-wider">
                               <th className="p-3">Date</th>
-                              <th className="p-3 text-center">Total Staff</th>
-                              <th className="p-3 text-center">Actual Drinks</th>
-                              <th className="p-3 text-center">Snack-Only (Avail)</th>
-                              <th className="p-3 text-center">Extra Snacks (Avail)</th>
-                              <th className="p-3 text-center">Manual Moves</th>
+                              <th className="p-3 text-center">Total Staff<br/><span className="text-[10px] text-gray-400 normal-case"></span></th>
+                              <th className="p-3 text-center text-tea-700">Tea Sessions<br/><span className="text-[10px] text-tea-400 normal-case">AM | PM</span></th>
+                              <th className="p-3 text-center bg-blue-50 text-blue-700">Total Cups<br/><span className="text-[10px] text-blue-400 normal-case">(Item Count - drinks)</span></th>
+                              <th className="p-3 text-center">Snack-Only<br/><span className="text-[10px] text-gray-400 normal-case">AM | PM</span></th>
+                              <th className="p-3 text-center">Multi-Snack {'>'} 1 <br/><span className="text-[10px] text-gray-400 normal-case">AM | PM</span></th>
+                              <th className="p-3 text-center">Manual Moves<br/><span className="text-[10px] text-gray-400 normal-case">(Item Count)</span></th>
                           </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
                           {companyBillRows.length === 0 ? (
-                              <tr><td colSpan={6} className="p-6 text-center text-gray-400">No activity logged.</td></tr>
+                              <tr><td colSpan={7} className="p-6 text-center text-gray-400">No activity logged.</td></tr>
                           ) : (
-                              companyBillRows.slice().reverse().map(row => {
+                              // Sorted by date ascending
+                              companyBillRows.map(row => {
                                   const date = row.date;
                                   const logs = dailyGroupedLogs[date] || [];
-                                  const drinkConsumers = new Set(logs.filter(l => l.itemType === 'drink').map(l => l.employeeId));
-                                  const snackCounts: Record<string, number> = {};
-                                  logs.filter(l => l.itemType === 'snack').forEach(l => {
-                                      const qty = l.quantity || 1;
-                                      snackCounts[l.employeeId] = (snackCounts[l.employeeId] || 0) + qty;
-                                  });
                                   
-                                  const snackOnly = Object.keys(snackCounts).filter(id => !drinkConsumers.has(id)).length;
-                                  const extraSnacks = Object.values(snackCounts).filter(count => count > 1).length;
+                                  // --- Apply Session Logic to visual breakdown (Mirroring BillingService) ---
+                                  // This ensures the "Snack-Only" numbers visually align with the "Manual Moves"
+                                  
+                                  // 1. Split into AM (Before 1PM) and PM (After 1PM)
+                                  const amLogs = logs.filter(l => {
+                                      const d = new Date(l.date);
+                                      if (isNaN(d.getTime())) return true; // Legacy
+                                      return d.getHours() < 13;
+                                  });
+                                  const pmLogs = logs.filter(l => {
+                                      const d = new Date(l.date);
+                                      if (isNaN(d.getTime())) return false;
+                                      return d.getHours() >= 13;
+                                  });
+
+                                  // 2. Calculate Stats per Session
+                                  const getSessionStats = (sessionLogs: Consumption[]) => {
+                                      const drinkConsumers = new Set(sessionLogs.filter(l => l.itemType === 'drink').map(l => l.employeeId));
+                                      
+                                      const snackCounts: Record<string, number> = {};
+                                      sessionLogs.filter(l => l.itemType === 'snack').forEach(l => {
+                                          const qty = l.quantity || 1;
+                                          snackCounts[l.employeeId] = (snackCounts[l.employeeId] || 0) + qty;
+                                      });
+
+                                      // People who had snacks but NO drink in THIS session
+                                      const snackOnly = Object.keys(snackCounts).filter(id => !drinkConsumers.has(id)).length;
+                                      // People who had > 1 snack quantity in THIS session
+                                      const multiSnack = Object.values(snackCounts).filter(count => count > 1).length;
+
+                                      return { snackOnly, multiSnack };
+                                  };
+
+                                  const amStats = getSessionStats(amLogs);
+                                  const pmStats = getSessionStats(pmLogs);
                                   
                                   return (
                                       <tr key={date} className="hover:bg-gray-50">
@@ -453,9 +500,22 @@ export const WeeklyReport: React.FC = () => {
                                               {new Date(date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', weekday: 'short' })}
                                           </td>
                                           <td className="p-3 text-center">{activeEmployeeCount}</td>
-                                          <td className="p-3 text-center text-blue-600 font-bold">{drinkConsumers.size}</td>
-                                          <td className="p-3 text-center text-orange-600">{snackOnly}</td>
-                                          <td className="p-3 text-center text-purple-600">{extraSnacks}</td>
+                                          <td className="p-3 text-center text-tea-600 font-bold">
+                                              <span title="Morning">{row.amDrinkCount}</span>
+                                              <span className="text-gray-300 mx-1">|</span>
+                                              <span title="Afternoon">{row.pmDrinkCount}</span>
+                                          </td>
+                                          <td className="p-3 text-center bg-blue-50 text-blue-700 font-bold">{row.totalDrinkCount}</td>
+                                          <td className="p-3 text-center text-orange-600">
+                                              <span title="Morning Snack Only">{amStats.snackOnly}</span>
+                                              <span className="text-gray-300 mx-1">|</span>
+                                              <span title="Afternoon Snack Only">{pmStats.snackOnly}</span>
+                                          </td>
+                                          <td className="p-3 text-center text-purple-600">
+                                              <span title="Morning Multi-Snack">{amStats.multiSnack}</span>
+                                              <span className="text-gray-300 mx-1">|</span>
+                                              <span title="Afternoon Multi-Snack">{pmStats.multiSnack}</span>
+                                          </td>
                                           <td className="p-3 text-center text-gray-700 font-bold bg-gray-50">
                                               {row.manualAddedCount > 0 ? `+${row.manualAddedCount}` : '-'}
                                           </td>
@@ -470,11 +530,31 @@ export const WeeklyReport: React.FC = () => {
 
           {/* Employee Snack Bill */}
           <div className="space-y-6">
-               <div className="flex items-center gap-2 border-b border-gray-200 pb-2">
-                  <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center text-orange-600">
-                      <Cookie className="w-4 h-4" />
+               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-gray-200 pb-4">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center text-orange-600">
+                        <Cookie className="w-4 h-4" />
+                    </div>
+                    <h3 className="text-lg font-bold text-gray-800">Employee Snack Bill</h3>
                   </div>
-                  <h3 className="text-lg font-bold text-gray-800">Employee Snack Bill</h3>
+
+                  {/* Contextual Adjustment Date Picker */}
+                  <div className="flex items-center gap-2 bg-orange-50 p-2 rounded-lg border border-orange-100 animate-fade-in">
+                      <Edit3 className="w-4 h-4 text-orange-600" />
+                      <span className="text-xs font-semibold text-orange-800">Manage Adjustments For:</span>
+                      <input 
+                          type="date"
+                          value={adjustmentDate}
+                          onChange={e => {
+                              setAdjustmentDate(e.target.value);
+                              // Clear drafts when switching dates to prevent confusion
+                              setDraftAdjustments({});
+                          }}
+                          min={startDate}
+                          max={endDate}
+                          className="text-sm bg-white border border-orange-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-orange-300 text-gray-700 font-medium"
+                      />
+                  </div>
               </div>
 
               <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
@@ -482,8 +562,10 @@ export const WeeklyReport: React.FC = () => {
                     <thead>
                         <tr className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wider">
                             <th className="p-4 font-semibold">Employee</th>
-                            <th className="p-4 font-semibold">Items</th>
-                            <th className="p-4 font-semibold text-center w-64">Adjust (Today)</th>
+                            <th className="p-4 font-semibold">Weekly Items</th>
+                            <th className="p-4 font-semibold text-center w-64 bg-orange-50 border-x border-orange-100">
+                                Adjust ({adjustmentDate ? new Date(adjustmentDate).toLocaleDateString(undefined, {month:'short', day:'numeric'}) : 'Select Date'})
+                            </th>
                             <th className="p-4 font-semibold text-center">Net Count</th>
                             <th className="p-4 font-semibold text-right">Amount</th>
                             <th className="p-4 font-semibold text-right">Revised Amount</th>
@@ -496,7 +578,8 @@ export const WeeklyReport: React.FC = () => {
                             employeeBills.map((bill) => {
                                 const hasChanges = isDirty(bill.employee.id);
                                 const isSaving = savingEmpId === bill.employee.id;
-                                const todaySnacks = getTodaySnackItems(bill.employee.id);
+                                // Changed: Fetch items for the SELECTED adjustment date, not necessarily today
+                                const adjustmentDateSnacks = getSnackItemsForAdjustmentDate(bill.employee.id);
                                 
                                 return (
                                 <tr key={bill.employee.id} className="hover:bg-gray-50 transition-colors">
@@ -510,33 +593,41 @@ export const WeeklyReport: React.FC = () => {
                                     </td>
                                     
                                     {/* Manual Adjustment Column (Item Specific) */}
-                                    <td className="p-4 text-center">
+                                    <td className="p-4 text-center bg-orange-50/30 border-x border-orange-50">
                                         {isSaving ? (
                                             <div className="flex justify-center p-2">
                                                 <Loader2 className="w-5 h-5 animate-spin text-tea-600" />
                                             </div>
                                         ) : (
                                             <div className="flex flex-col items-center gap-2">
-                                                {todaySnacks.length === 0 ? (
-                                                    <span className="text-xs text-gray-300">-</span>
+                                                {!adjustmentDate ? (
+                                                    <span className="text-xs text-gray-400 italic">Select date above</span>
+                                                ) : adjustmentDateSnacks.length === 0 ? (
+                                                    <span className="text-xs text-gray-300 italic">No snacks on {new Date(adjustmentDate).toLocaleDateString(undefined, {weekday:'short'})}</span>
                                                 ) : (
-                                                    todaySnacks.map(item => {
+                                                    adjustmentDateSnacks.map(item => {
                                                         const currentDraft = draftAdjustments[bill.employee.id]?.[item.itemId];
-                                                        const currentStored = bill.todayAdjustmentMap[item.itemId] || 0;
+                                                        const currentStored = storedDailyAdjustments[adjustmentDate]?.[bill.employee.id]?.[item.itemId] || 0;
+                                                        
                                                         const displayVal = currentDraft !== undefined ? currentDraft : currentStored;
                                                         const isModified = currentDraft !== undefined && currentDraft !== currentStored;
                                                         const isAdjusted = displayVal > 0;
+                                                        
+                                                        const remainingQty = item.totalQty - displayVal;
 
                                                         return (
-                                                            <div key={item.itemId} className={`flex items-center justify-between w-full rounded p-1 text-xs ${isAdjusted ? 'bg-green-50 ring-1 ring-green-100' : 'bg-gray-50'}`}>
+                                                            <div key={item.itemId} className={`flex items-center justify-between w-full rounded p-1 text-xs ${isAdjusted ? 'bg-green-50 ring-1 ring-green-100' : 'bg-white shadow-sm'}`}>
                                                                 <div className="flex flex-col items-start mr-2">
-                                                                    <span className="text-gray-600 truncate max-w-[60px]" title={item.name}>{item.name}</span>
+                                                                    <div className="flex items-center">
+                                                                        <span className="text-gray-600 truncate max-w-[60px]" title={item.name}>{item.name}</span>
+                                                                        <span className={`ml-1 font-mono ${remainingQty === 0 ? 'text-gray-300' : 'text-gray-500 font-bold'}`}>x{remainingQty}</span>
+                                                                    </div>
                                                                     {isAdjusted && <span className="text-[9px] text-green-600 font-bold">{displayVal} to Co.</span>}
                                                                 </div>
                                                                 <div className={`flex items-center gap-1 ${isModified ? 'bg-blue-50 ring-1 ring-blue-100 rounded' : ''}`}>
                                                                     <button 
                                                                         onClick={() => handleDraftChange(bill.employee.id, item.itemId, -1, item.totalQty)}
-                                                                        className="w-5 h-5 flex items-center justify-center bg-white border border-gray-200 rounded hover:bg-gray-100 text-gray-600"
+                                                                        className="w-5 h-5 flex items-center justify-center bg-gray-50 border border-gray-200 rounded hover:bg-gray-100 text-gray-600"
                                                                         disabled={displayVal <= 0}
                                                                     >
                                                                         <Minus className="w-3 h-3" />
@@ -544,7 +635,7 @@ export const WeeklyReport: React.FC = () => {
                                                                     <span className={`w-4 text-center font-bold ${isModified ? 'text-blue-600' : (isAdjusted ? 'text-green-700' : 'text-gray-700')}`}>{displayVal}</span>
                                                                     <button 
                                                                         onClick={() => handleDraftChange(bill.employee.id, item.itemId, 1, item.totalQty)}
-                                                                        className="w-5 h-5 flex items-center justify-center bg-white border border-gray-200 rounded hover:bg-gray-100 text-gray-600"
+                                                                        className="w-5 h-5 flex items-center justify-center bg-gray-50 border border-gray-200 rounded hover:bg-gray-100 text-gray-600"
                                                                         disabled={displayVal >= item.totalQty}
                                                                     >
                                                                         <Plus className="w-3 h-3" />

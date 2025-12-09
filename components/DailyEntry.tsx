@@ -1,8 +1,7 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { StorageService } from '../services/storageService';
 import { Employee, Item, Consumption } from '../types';
-import { Plus, Trash2, Coffee, User, Cookie, X, Loader2, Pencil, Save, Check } from 'lucide-react';
+import { Plus, Trash2, Coffee, User, Cookie, X, Loader2, Pencil, Save, Check, Sun, Moon, LayoutList } from 'lucide-react';
 
 interface SnackSlot {
   key: string; 
@@ -40,6 +39,9 @@ export const DailyEntry: React.FC = () => {
     { key: 'init', itemId: '', price: 0, quantity: 1 }
   ]);
 
+  // Activity Feed Filter
+  const [activityTab, setActivityTab] = useState<'all' | 'am' | 'pm'>('all');
+
   useEffect(() => {
     initData();
   }, []);
@@ -76,6 +78,22 @@ export const DailyEntry: React.FC = () => {
       });
       return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
   }, [recentLog]);
+
+  // Filtered logs based on active tab
+  const displayedLogs = useMemo(() => {
+      if (activityTab === 'all') return groupedLogs;
+      
+      return groupedLogs.filter(([, logs]) => {
+          if (logs.length === 0) return false;
+          // Determine time from the first log in the group
+          const date = new Date(logs[0].date);
+          const hour = date.getHours();
+          
+          if (activityTab === 'am') return hour < 13; // Before 1 PM
+          if (activityTab === 'pm') return hour >= 13; // 1 PM onwards
+          return true;
+      });
+  }, [groupedLogs, activityTab]);
 
   const drinkItems = items.filter(i => i.type === 'drink');
   const snackItems = items.filter(i => i.type === 'snack');
@@ -297,7 +315,7 @@ export const DailyEntry: React.FC = () => {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
       {/* Entry Form */}
-      <div className="lg:col-span-7 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+      <div className="lg:col-span-6 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
         <div className="flex justify-between items-center mb-6">
             <h2 className="text-xl font-semibold flex items-center gap-2 text-tea-900">
             <Coffee className="w-5 h-5" />
@@ -433,17 +451,43 @@ export const DailyEntry: React.FC = () => {
       </div>
 
       {/* Today's Activity Feed */}
-      <div className="lg:col-span-5 bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col h-[600px]">
-        <h2 className="text-xl font-semibold mb-4 text-tea-900 border-b pb-2">Today's Activity</h2>
+      <div className="lg:col-span-6 bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col h-[600px]">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 border-b border-gray-100 pb-3 gap-3">
+            <h2 className="text-xl font-semibold text-tea-900">Today's Activity</h2>
+            
+            <div className="flex bg-gray-100 p-1 rounded-lg">
+                <button
+                    onClick={() => setActivityTab('all')}
+                    className={`flex items-center gap-1 px-3 py-1 rounded-md text-xs font-bold transition-all ${activityTab === 'all' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    title="All Logs"
+                >
+                    <LayoutList className="w-3 h-3" /> All
+                </button>
+                <button
+                    onClick={() => setActivityTab('am')}
+                    className={`flex items-center gap-1 px-3 py-1 rounded-md text-xs font-bold transition-all ${activityTab === 'am' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    title="Before 1 PM"
+                >
+                    <Sun className="w-3 h-3" /> AM
+                </button>
+                <button
+                    onClick={() => setActivityTab('pm')}
+                    className={`flex items-center gap-1 px-3 py-1 rounded-md text-xs font-bold transition-all ${activityTab === 'pm' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    title="1 PM onwards"
+                >
+                    <Moon className="w-3 h-3" /> PM
+                </button>
+            </div>
+        </div>
         
         <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-          {groupedLogs.length === 0 ? (
+          {displayedLogs.length === 0 ? (
             <div className="text-center text-gray-400 mt-20 flex flex-col items-center gap-3">
                 <Coffee className="w-10 h-10 opacity-20" />
-                <p>No entries for today yet.</p>
+                <p>No {activityTab !== 'all' ? `${activityTab.toUpperCase()} ` : ''}entries found for today.</p>
             </div>
           ) : (
-            groupedLogs.map(([key, logs]) => {
+            displayedLogs.map(([key, logs]) => {
                 const firstLog = logs[0];
                 const empName = employees.find(e => e.id === firstLog.employeeId)?.name || 'Unknown';
                 const time = new Date(firstLog.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
