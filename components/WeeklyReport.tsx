@@ -2,12 +2,12 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { StorageService, DailyAdjustmentMap } from '../services/storageService';
 import { BillingService, DailyCompanyBill, EmployeeBill } from '../services/billingService';
 import { Consumption, Employee } from '../types';
-import { FileText, Calendar, Sparkles, Coffee, Cookie, Plus, Minus, ChevronDown, ChevronRight, Info, Loader2, Save, X, Edit3 } from 'lucide-react';
+import { FileText, Calendar, Sparkles, Coffee, Cookie, Plus, Minus, ChevronDown, ChevronRight, Info, Loader2, Save, X, Edit3, TrendingUp } from 'lucide-react';
 import { generateWeeklyInsight } from '../services/geminiService';
 import { TallyAutomation } from './TallyAutomation';
 
 // Helper: Convert ISO string (possibly UTC) to Local YYYY-MM-DD
-const getLocalYMD = (isoStr: string) => {
+const getLocalYMD = (isoStr: string | Date) => {
     if (!isoStr) return '';
     const d = new Date(isoStr);
     const offset = d.getTimezoneOffset() * 60000;
@@ -47,7 +47,6 @@ export const WeeklyReport: React.FC = () => {
     const day = curr.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
     
     // Logic for Saturday-to-Friday week
-    // Sun(0) -> -1, Mon(1) -> -2, ..., Fri(5) -> -6, Sat(6) -> 0
     const diffToSaturday = (day + 1) % 7;
     const firstDate = new Date(curr);
     firstDate.setDate(curr.getDate() - diffToSaturday);
@@ -55,9 +54,9 @@ export const WeeklyReport: React.FC = () => {
     const lastDate = new Date(firstDate);
     lastDate.setDate(firstDate.getDate() + 6); // Land on Friday
 
-    const startStr = getLocalYMD(firstDate.toISOString());
-    const endStr = getLocalYMD(lastDate.toISOString());
-    const todayStr = getLocalYMD(new Date().toISOString());
+    const startStr = getLocalYMD(firstDate);
+    const endStr = getLocalYMD(lastDate);
+    const todayStr = getLocalYMD(new Date());
 
     setStartDate(startStr);
     setEndDate(endStr);
@@ -81,22 +80,61 @@ export const WeeklyReport: React.FC = () => {
     const stored = StorageService.getDailyAdjustments();
     setStoredDailyAdjustments(stored);
     
-    // Sync drafts: When loading, clear old drafts to avoid confusion across dates
     setDraftAdjustments({});
   };
+
+  // --- Summary Stickers Logic ---
+  const calculatePeriodStats = (start: string, end: string) => {
+    const filtered = consumptions.filter(c => {
+        const d = c.date.split('T')[0];
+        return d >= start && d <= end;
+    });
+    
+    const drinks = filtered
+      .filter(c => c.itemType === 'drink')
+      .reduce((sum, c) => sum + (c.price * (c.quantity || 1)), 0);
+      
+    const snacks = filtered
+      .filter(c => c.itemType === 'snack')
+      .reduce((sum, c) => sum + (c.price * (c.quantity || 1)), 0);
+    
+    return { total: drinks + snacks, drinks, snacks };
+  };
+
+  const summaryStickers = useMemo(() => {
+    if (consumptions.length === 0 || employees.length === 0) return [];
+    
+    const now = new Date();
+    const todayStr = getLocalYMD(now);
+    
+    // Today
+    const todayStats = calculatePeriodStats(todayStr, todayStr);
+    
+    // This Week (Sat-Fri)
+    const curr = new Date();
+    const day = curr.getDay();
+    const diffToSaturday = (day + 1) % 7;
+    const weekStart = new Date(curr);
+    weekStart.setDate(curr.getDate() - diffToSaturday);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    const thisWeekStats = calculatePeriodStats(getLocalYMD(weekStart), getLocalYMD(weekEnd));
+
+    return [
+        { label: 'Today', ...todayStats, color: 'tea' },
+        { label: 'This Week', ...thisWeekStats, color: 'blue' },
+    ];
+  }, [consumptions, employees, activeEmployeeCount]);
 
   // Helper to check if adjustments are pending specifically for the SELECTED adjustment date
   const isDirty = (empId: string) => {
       if (!adjustmentDate) return false;
       
       const currentDraft = draftAdjustments[empId];
-      // If no draft entry exists for this user, it means nothing has been touched/modified since last save
       if (!currentDraft) return false;
 
       const currentStored = storedDailyAdjustments[adjustmentDate]?.[empId] || {};
 
-      // Only iterate keys present in the draft. 
-      // If a key is missing from draft, it implies it hasn't been modified.
       for (const key of Object.keys(currentDraft)) {
           const draftVal = currentDraft[key];
           const storedVal = currentStored[key] || 0;
@@ -108,8 +146,6 @@ export const WeeklyReport: React.FC = () => {
   const effectiveDailyAdjustments = useMemo(() => {
       const merged: DailyAdjustmentMap = JSON.parse(JSON.stringify(storedDailyAdjustments));
       
-      // Merge current drafts into the stored data for calculation preview
-      // Note: We only merge drafts for the currently selected adjustmentDate
       if (adjustmentDate) {
           if (!merged[adjustmentDate]) merged[adjustmentDate] = {};
           Object.keys(draftAdjustments).forEach(empId => {
@@ -171,9 +207,8 @@ export const WeeklyReport: React.FC = () => {
       if (!adjustmentDate) return;
 
       setDraftAdjustments(prev => {
-          const empDrafts = { ...(prev[prev.hasOwnProperty(empId) ? empId : empId] || {}) };
+          const empDrafts = { ...(prev[empId] || {}) };
           
-          // Get correct current state
           const currentDraftVal = (prev[empId] || {})[itemId];
           const currentStoredVal = storedDailyAdjustments[adjustmentDate]?.[empId]?.[itemId] || 0;
           
@@ -212,7 +247,6 @@ export const WeeklyReport: React.FC = () => {
           await StorageService.saveDailyAdjustments(allAdjustments);
           setStoredDailyAdjustments(allAdjustments);
           
-          // Clear draft for this user as it is now saved
           setDraftAdjustments(prev => {
               const next = { ...prev };
               delete next[empId];
@@ -320,6 +354,29 @@ export const WeeklyReport: React.FC = () => {
                     />
                 </div>
             </div>
+      </div>
+
+      {/* Summary Stickers Section */}
+      <div className="grid grid-cols-2 gap-4">
+          {summaryStickers.map((sticker, idx) => (
+              <div key={idx} className={`bg-white p-4 rounded-xl border border-gray-100 shadow-sm flex flex-col items-center text-center group hover:border-${sticker.color}-200 transition-all cursor-default`}>
+                  <div className={`w-10 h-10 rounded-full bg-${sticker.color}-50 flex items-center justify-center text-${sticker.color}-600 mb-2 group-hover:scale-110 transition-transform`}>
+                      <TrendingUp className="w-5 h-5" />
+                  </div>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">{sticker.label}</span>
+                  <div className="text-xl font-extrabold text-gray-800 mb-2">₹{sticker.total}</div>
+                  
+                  <div className="flex items-center gap-2 text-[11px] font-semibold">
+                      <div className="flex items-center gap-1 text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full" title="Drinks">
+                          <Coffee className="w-3 h-3" /> ₹{sticker.drinks}
+                      </div>
+                      <span className="text-gray-300">|</span>
+                      <div className="flex items-center gap-1 text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full" title="Snacks">
+                          <Cookie className="w-3 h-3" /> ₹{sticker.snacks}
+                      </div>
+                  </div>
+              </div>
+          ))}
       </div>
 
       <div className="grid grid-cols-1 gap-8">
@@ -463,18 +520,13 @@ export const WeeklyReport: React.FC = () => {
                           {companyBillRows.length === 0 ? (
                               <tr><td colSpan={7} className="p-6 text-center text-gray-400">No activity logged.</td></tr>
                           ) : (
-                              // Sorted by date ascending
                               companyBillRows.map(row => {
                                   const date = row.date;
                                   const logs = dailyGroupedLogs[date] || [];
                                   
-                                  // --- Apply Session Logic to visual breakdown (Mirroring BillingService) ---
-                                  // This ensures the "Snack-Only" numbers visually align with the "Manual Moves"
-                                  
-                                  // 1. Split into AM (Before 1PM) and PM (After 1PM)
                                   const amLogs = logs.filter(l => {
                                       const d = new Date(l.date);
-                                      if (isNaN(d.getTime())) return true; // Legacy
+                                      if (isNaN(d.getTime())) return true; 
                                       return d.getHours() < 13;
                                   });
                                   const pmLogs = logs.filter(l => {
@@ -483,7 +535,6 @@ export const WeeklyReport: React.FC = () => {
                                       return d.getHours() >= 13;
                                   });
 
-                                  // 2. Calculate Stats per Session
                                   const getSessionStats = (sessionLogs: Consumption[]) => {
                                       const drinkConsumers = new Set(sessionLogs.filter(l => l.itemType === 'drink').map(l => l.employeeId));
                                       
@@ -493,9 +544,7 @@ export const WeeklyReport: React.FC = () => {
                                           snackCounts[l.employeeId] = (snackCounts[l.employeeId] || 0) + qty;
                                       });
 
-                                      // People who had snacks but NO drink in THIS session
                                       const snackOnly = Object.keys(snackCounts).filter(id => !drinkConsumers.has(id)).length;
-                                      // People who had > 1 snack quantity in THIS session
                                       const multiSnack = Object.values(snackCounts).filter(count => count > 1).length;
 
                                       return { snackOnly, multiSnack };
@@ -548,7 +597,6 @@ export const WeeklyReport: React.FC = () => {
                     <h3 className="text-lg font-bold text-gray-800">Employee Snack Bill</h3>
                   </div>
 
-                  {/* Contextual Adjustment Date Picker */}
                   <div className="flex items-center gap-2 bg-orange-50 p-2 rounded-lg border border-orange-100 animate-fade-in">
                       <Edit3 className="w-4 h-4 text-orange-600" />
                       <span className="text-xs font-semibold text-orange-800">Manage Adjustments For:</span>
@@ -557,7 +605,6 @@ export const WeeklyReport: React.FC = () => {
                           value={adjustmentDate}
                           onChange={e => {
                               setAdjustmentDate(e.target.value);
-                              // Clear drafts when switching dates to prevent confusion
                               setDraftAdjustments({});
                           }}
                           min={startDate}
@@ -588,7 +635,6 @@ export const WeeklyReport: React.FC = () => {
                             employeeBills.map((bill) => {
                                 const hasChanges = isDirty(bill.employee.id);
                                 const isSaving = savingEmpId === bill.employee.id;
-                                // Changed: Fetch items for the SELECTED adjustment date, not necessarily today
                                 const adjustmentDateSnacks = getSnackItemsForAdjustmentDate(bill.employee.id);
                                 
                                 return (
@@ -602,7 +648,6 @@ export const WeeklyReport: React.FC = () => {
                                         </div>
                                     </td>
                                     
-                                    {/* Manual Adjustment Column (Item Specific) */}
                                     <td className="p-4 text-center bg-orange-50/30 border-x border-orange-50">
                                         {isSaving ? (
                                             <div className="flex justify-center p-2">
@@ -656,7 +701,6 @@ export const WeeklyReport: React.FC = () => {
                                                     })
                                                 )}
                                                 
-                                                {/* Action Buttons: Only show if ANY change exists for this user */}
                                                 {hasChanges && (
                                                     <div className="flex gap-2 animate-fade-in mt-1 w-full justify-center">
                                                         <button 
