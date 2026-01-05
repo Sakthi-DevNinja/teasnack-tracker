@@ -44,12 +44,16 @@ export const WeeklyReport: React.FC = () => {
 
   useEffect(() => {
     const curr = new Date(); 
-    const day = curr.getDay() || 7; 
-    if (day !== 1) curr.setHours(-24 * (day - 1));
+    const day = curr.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
     
+    // Logic for Saturday-to-Friday week
+    // Sun(0) -> -1, Mon(1) -> -2, ..., Fri(5) -> -6, Sat(6) -> 0
+    const diffToSaturday = (day + 1) % 7;
     const firstDate = new Date(curr);
-    const lastDate = new Date(curr);
-    lastDate.setDate(lastDate.getDate() + 6); 
+    firstDate.setDate(curr.getDate() - diffToSaturday);
+    
+    const lastDate = new Date(firstDate);
+    lastDate.setDate(firstDate.getDate() + 6); // Land on Friday
 
     const startStr = getLocalYMD(firstDate.toISOString());
     const endStr = getLocalYMD(lastDate.toISOString());
@@ -167,10 +171,10 @@ export const WeeklyReport: React.FC = () => {
       if (!adjustmentDate) return;
 
       setDraftAdjustments(prev => {
-          const empDrafts = { ...(prev[empId] || {}) };
+          const empDrafts = { ...(prev[prev.hasOwnProperty(empId) ? empId : empId] || {}) };
           
           // Get correct current state
-          const currentDraftVal = empDrafts[itemId];
+          const currentDraftVal = (prev[empId] || {})[itemId];
           const currentStoredVal = storedDailyAdjustments[adjustmentDate]?.[empId]?.[itemId] || 0;
           
           const baseVal = currentDraftVal !== undefined ? currentDraftVal : currentStoredVal;
@@ -182,7 +186,7 @@ export const WeeklyReport: React.FC = () => {
           return {
               ...prev,
               [empId]: {
-                  ...empDrafts,
+                  ...(prev[empId] || {}),
                   [itemId]: newVal
               }
           };
@@ -346,7 +350,8 @@ export const WeeklyReport: React.FC = () => {
                         {companyBillRows.length === 0 ? (
                              <tr><td colSpan={7} className="p-8 text-center text-gray-400">No data available.</td></tr>
                         ) : (
-                            companyBillRows.map((row) => (
+                            companyBillRows.map((row) => {
+                                return (
                                 <React.Fragment key={row.date}>
                                     <tr 
                                         className="hover:bg-gray-50 transition-colors cursor-pointer group"
@@ -364,7 +369,7 @@ export const WeeklyReport: React.FC = () => {
                                              <span className="text-gray-300 mx-1">|</span>
                                              <span title="Afternoon">{row.pmDrinkCount}</span>
                                         </td>
-                                        <td className="p-4 text-center bg-blue-50 border-l border-blue-100 font-bold text-blue-700">
+                                        <td className="p-4 text-center bg-blue-50 border-l border-blue-100 font-bold text-blue-700 relative group/cell">
                                             {row.totalDrinkCount}
                                             <span className="text-[10px] text-blue-400 block">Cups</span>
                                         </td>
@@ -398,7 +403,7 @@ export const WeeklyReport: React.FC = () => {
                                         </tr>
                                     )}
                                 </React.Fragment>
-                            ))
+                            )})
                         )}
                     </tbody>
                     {companyBillRows.length > 0 && (
@@ -611,7 +616,7 @@ export const WeeklyReport: React.FC = () => {
                                                     <span className="text-xs text-gray-300 italic">No snacks on {new Date(adjustmentDate).toLocaleDateString(undefined, {weekday:'short'})}</span>
                                                 ) : (
                                                     adjustmentDateSnacks.map(item => {
-                                                        const currentDraft = draftAdjustments[bill.employee.id]?.[item.itemId];
+                                                        const currentDraft = (draftAdjustments[bill.employee.id] || {})[item.itemId];
                                                         const currentStored = storedDailyAdjustments[adjustmentDate]?.[bill.employee.id]?.[item.itemId] || 0;
                                                         
                                                         const displayVal = currentDraft !== undefined ? currentDraft : currentStored;

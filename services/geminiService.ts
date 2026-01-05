@@ -9,6 +9,7 @@ export const generateWeeklyInsight = async (
   items: Item[],
   tallyResults: TallyResult[]
 ): Promise<string> => {
+  // Always use a new instance with the API key from process.env.API_KEY
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const summaryData = {
@@ -33,10 +34,12 @@ export const generateWeeklyInsight = async (
   `;
 
   try {
+    // Correctly using ai.models.generateContent with 'gemini-3-flash-preview' for text tasks
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       contents: prompt,
     });
+    // Accessing .text property directly
     return response.text || "No insights generated.";
   } catch (error) {
     console.error("Gemini API Error:", error);

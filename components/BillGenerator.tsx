@@ -1,14 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { StorageService, DailyAdjustmentMap } from '../services/storageService';
 import { BillingService, DailyCompanyBill, EmployeeBill } from '../services/billingService';
 import { Consumption, Employee } from '../types';
-import { Receipt, Calendar, Printer, Cookie, Loader2, ChevronDown, ChevronRight, Send, Settings, Smartphone, Share2 } from 'lucide-react';
+import { Receipt, Calendar, Printer, Cookie, Loader2, ChevronDown, ChevronRight, Send, Settings, Smartphone, Share2, Coffee, TrendingUp } from 'lucide-react';
 
-const getLocalYMD = (isoStr: string) => {
-    if (!isoStr) return '';
-    const d = new Date(isoStr);
-    const offset = d.getTimezoneOffset() * 60000;
-    const local = new Date(d.getTime() - offset);
+const getLocalYMD = (date: Date) => {
+    const offset = date.getTimezoneOffset() * 60000;
+    const local = new Date(date.getTime() - offset);
     return local.toISOString().split('T')[0];
 };
 
@@ -34,14 +32,18 @@ export const BillGenerator: React.FC = () => {
 
   useEffect(() => {
     const curr = new Date(); 
-    const day = curr.getDay() || 7; 
-    if (day !== 1) curr.setHours(-24 * (day - 1)); 
+    const day = curr.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+    
+    // Logic for Saturday-to-Friday week
+    const diffToSaturday = (day + 1) % 7;
     const firstDate = new Date(curr);
-    const lastDate = new Date(curr);
-    lastDate.setDate(lastDate.getDate() + 6); 
+    firstDate.setDate(curr.getDate() - diffToSaturday);
+    
+    const lastDate = new Date(firstDate);
+    lastDate.setDate(firstDate.getDate() + 6); // Friday
 
-    setStartDate(getLocalYMD(firstDate.toISOString()));
-    setEndDate(getLocalYMD(lastDate.toISOString()));
+    setStartDate(getLocalYMD(firstDate));
+    setEndDate(getLocalYMD(lastDate));
 
     // Load UPI ID from local storage
     const savedUpi = localStorage.getItem('ts_upi_id');
@@ -71,7 +73,7 @@ export const BillGenerator: React.FC = () => {
   const generateBill = () => {
       if (!startDate || !endDate) return;
       const filteredConsumptions = consumptions.filter(c => {
-          const cDate = getLocalYMD(c.date);
+          const cDate = c.date.split('T')[0];
           return cDate >= startDate && cDate <= endDate;
       });
 
@@ -86,6 +88,64 @@ export const BillGenerator: React.FC = () => {
       setEmployeeBills(result.employeeBills);
       setGrandTotalCompany(result.grandTotalCompanyAmount);
   };
+
+  // --- Summary Stickers Logic ---
+
+  const calculatePeriodStats = (start: string, end: string) => {
+      // Filter raw consumptions for the period
+      const filtered = consumptions.filter(c => {
+          const d = c.date.split('T')[0];
+          return d >= start && d <= end;
+      });
+      
+      // Calculate totals based on raw item types regardless of billing split
+      const drinks = filtered
+        .filter(c => c.itemType === 'drink')
+        .reduce((sum, c) => sum + (c.price * (c.quantity || 1)), 0);
+        
+      const snacks = filtered
+        .filter(c => c.itemType === 'snack')
+        .reduce((sum, c) => sum + (c.price * (c.quantity || 1)), 0);
+      
+      return { total: drinks + snacks, drinks, snacks };
+  };
+
+  const summaryStickers = useMemo(() => {
+      if (consumptions.length === 0 || employees.length === 0) return [];
+      
+      const now = new Date();
+      const todayStr = getLocalYMD(now);
+      
+      // Today
+      const todayStats = calculatePeriodStats(todayStr, todayStr);
+      
+      // This Week (Sat-Fri)
+      const curr = new Date();
+      const day = curr.getDay();
+      const diffToSaturday = (day + 1) % 7;
+      const weekStart = new Date(curr);
+      weekStart.setDate(curr.getDate() - diffToSaturday);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6);
+      const thisWeekStats = calculatePeriodStats(getLocalYMD(weekStart), getLocalYMD(weekEnd));
+
+      // Last 2 Weeks (14 Days)
+      const twoWeeksStart = new Date(curr);
+      twoWeeksStart.setDate(curr.getDate() - 13);
+      const last2WeeksStats = calculatePeriodStats(getLocalYMD(twoWeeksStart), todayStr);
+
+      // This Month
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      const thisMonthStats = calculatePeriodStats(getLocalYMD(monthStart), getLocalYMD(monthEnd));
+
+      return [
+          { label: 'Today', ...todayStats, color: 'tea' },
+          { label: 'This Week', ...thisWeekStats, color: 'blue' },
+          { label: 'Last 2 Weeks', ...last2WeeksStats, color: 'purple' },
+          { label: 'This Month', ...thisMonthStats, color: 'orange' },
+      ];
+  }, [consumptions, employees, activeEmployeeCount, dailyAdjustments]);
 
   const handlePrint = () => {
       window.print();
@@ -138,10 +198,7 @@ export const BillGenerator: React.FC = () => {
           .map(i => `${i.name} x${i.count} = ₹${i.total}`)
           .join('%0A'); 
 
-      // Using the hosted app URL as context for the share action so Telegram treats it as a shareable link
       const shareUrl = "Bill Generated via Teadesk App";
-
-      // Message text DOES NOT contain the URL, only the UPI ID
       const messageText = `%0A%0AHello ${bill.employee.name},%0A%0AHere is your snack bill for ${startDate} to ${endDate}:%0A%0A${itemsList}%0A%0A**Total: ₹${bill.finalPayableAmount}**%0A%0APlease pay to UPI ID:%0A\`${upiId}\``;
 
       window.open(`https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${messageText}`, '_blank');
@@ -173,8 +230,6 @@ export const BillGenerator: React.FC = () => {
   };
 
   const totalEmployeeAmount = employeeBills.reduce((sum, row) => sum + (row.finalPayableAmount || 0), 0);
-  
-  // Use actualDrinkCount 
   const totalDrinksCount = companyBill.reduce((a,b) => a + (b.actualDrinkCount || 0) + (b.manualAddedCount || 0), 0);
 
   if (loading) {
@@ -245,6 +300,29 @@ export const BillGenerator: React.FC = () => {
             </div>
       </div>
 
+      {/* Summary Stickers Section (No Print) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 print:hidden">
+          {summaryStickers.map((sticker, idx) => (
+              <div key={idx} className={`bg-white p-4 rounded-xl border border-gray-100 shadow-sm flex flex-col items-center text-center group hover:border-${sticker.color}-200 transition-all cursor-default`}>
+                  <div className={`w-10 h-10 rounded-full bg-${sticker.color}-50 flex items-center justify-center text-${sticker.color}-600 mb-2 group-hover:scale-110 transition-transform`}>
+                      <TrendingUp className="w-5 h-5" />
+                  </div>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">{sticker.label}</span>
+                  <div className="text-xl font-extrabold text-gray-800 mb-2">₹{sticker.total}</div>
+                  
+                  <div className="flex items-center gap-2 text-[11px] font-semibold">
+                      <div className="flex items-center gap-1 text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full" title="Drinks">
+                          <Coffee className="w-3 h-3" /> ₹{sticker.drinks}
+                      </div>
+                      <span className="text-gray-300">|</span>
+                      <div className="flex items-center gap-1 text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full" title="Snacks">
+                          <Cookie className="w-3 h-3" /> ₹{sticker.snacks}
+                      </div>
+                  </div>
+              </div>
+          ))}
+      </div>
+
       <div className="flex flex-col gap-12 print:gap-12">
           
           {/* Company Bill Section */}
@@ -264,7 +342,7 @@ export const BillGenerator: React.FC = () => {
                       <tr className="bg-gray-50 border-b border-gray-200 text-gray-600">
                           <th className="p-3 w-8"></th>
                           <th className="p-3 font-semibold">Date</th>
-                          <th className="p-3 font-semibold text-center">Items (Drinks + Extras)</th>
+                          <th className="p-3 font-semibold text-center">Items (Drinks)</th>
                           <th className="p-3 font-semibold text-right">Amount (₹)</th>
                       </tr>
                   </thead>

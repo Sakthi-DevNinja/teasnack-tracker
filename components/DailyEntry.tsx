@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { StorageService } from '../services/storageService';
 import { Employee, Item, Consumption } from '../types';
-import { Plus, Trash2, Coffee, User, Cookie, X, Loader2, Pencil, Save, Check, Sun, Moon, LayoutList } from 'lucide-react';
+import { Plus, Trash2, Coffee, User, Cookie, X, Loader2, Pencil, Save, Check, Sun, Moon, LayoutList, CalendarClock, History } from 'lucide-react';
 
 interface SnackSlot {
   key: string; 
@@ -13,9 +13,15 @@ interface SnackSlot {
 // Helper: Get Local Date String YYYY-MM-DD
 const getLocalYMD = (val: string | Date) => {
     if (!val) return '';
-    // If it's a string like "2023-10-28T10:00:00", just take the first part
     if (typeof val === 'string') return val.split('T')[0];
     return val.getFullYear() + '-' + String(val.getMonth() + 1).padStart(2, '0') + '-' + String(val.getDate()).padStart(2, '0');
+};
+
+// Helper: Get current datetime in local format for input value (YYYY-MM-DDTHH:mm)
+const getLocalDateTimeString = (date = new Date()) => {
+    const offset = date.getTimezoneOffset() * 60000;
+    const local = new Date(date.getTime() - offset);
+    return local.toISOString().slice(0, 16);
 };
 
 export const DailyEntry: React.FC = () => {
@@ -38,6 +44,10 @@ export const DailyEntry: React.FC = () => {
   const [snackSlots, setSnackSlots] = useState<SnackSlot[]>([
     { key: 'init', itemId: '', price: 0, quantity: 1 }
   ]);
+
+  // Missed Entry State
+  const [isManualTime, setIsManualTime] = useState(false);
+  const [manualTimestamp, setManualTimestamp] = useState(getLocalDateTimeString());
 
   // Activity Feed Filter
   const [activityTab, setActivityTab] = useState<'all' | 'am' | 'pm'>('all');
@@ -62,43 +72,36 @@ export const DailyEntry: React.FC = () => {
   const refreshLogs = () => {
     const todayLocal = getLocalYMD(new Date());
     const allLogs = StorageService.getConsumptions();
-    // Filter using simple string comparison for robust local date matching
     const todaysLogs = allLogs.filter(log => getLocalYMD(log.date) === todayLocal);
     setRecentLog(todaysLogs);
   };
 
-  // Group logs by Date (Timestamp) and Employee for the Activity Feed
   const groupedLogs = useMemo(() => {
       const groups: Record<string, Consumption[]> = {};
       recentLog.forEach(log => {
-          // Grouping by exact timestamp allows us to group items submitted together
           const key = `${log.date}_${log.employeeId}`;
           if (!groups[key]) groups[key] = [];
           groups[key].push(log);
       });
+      // Corrected: Use localeCompare for string comparison as strings do not have a .compare method
       return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
   }, [recentLog]);
 
-  // Filtered logs based on active tab
   const displayedLogs = useMemo(() => {
       if (activityTab === 'all') return groupedLogs;
       
       return groupedLogs.filter(([, logs]) => {
           if (logs.length === 0) return false;
-          // Determine time from the first log in the group
           const date = new Date(logs[0].date);
           const hour = date.getHours();
-          
-          if (activityTab === 'am') return hour < 13; // Before 1 PM
-          if (activityTab === 'pm') return hour >= 13; // 1 PM onwards
+          if (activityTab === 'am') return hour < 13;
+          if (activityTab === 'pm') return hour >= 13;
           return true;
       });
   }, [groupedLogs, activityTab]);
 
   const drinkItems = items.filter(i => i.type === 'drink');
   const snackItems = items.filter(i => i.type === 'snack');
-
-  // --- Handlers ---
 
   const handleDrinkChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value;
@@ -144,18 +147,15 @@ export const DailyEntry: React.FC = () => {
       setDrinkPrice(0);
       setSnackSlots([{ key: crypto.randomUUID(), itemId: '', price: 0, quantity: 1 }]);
       setEditingLogIds(null);
+      setIsManualTime(false);
+      setManualTimestamp(getLocalDateTimeString());
   };
-
-  // --- Edit Logic ---
 
   const handleEditGroup = (logs: Consumption[]) => {
       if (logs.length === 0) return;
       const first = logs[0];
-      
-      // 1. Set Employee
       setSelectedEmployeeId(first.employeeId);
       
-      // 2. Set Drink (if any)
       const drinkLog = logs.find(l => l.itemType === 'drink');
       if (drinkLog) {
           setSelectedDrinkId(drinkLog.itemId);
@@ -165,33 +165,24 @@ export const DailyEntry: React.FC = () => {
           setDrinkPrice(0);
       }
 
-      // 3. Set Snacks
       const snackLogs = logs.filter(l => l.itemType === 'snack');
       if (snackLogs.length > 0) {
-          // If editing existing rows, we likely have 1 row per item if old data, or 1 row with qty if new data.
-          // We need to normalize back to slots.
-          const slots: SnackSlot[] = [];
-          snackLogs.forEach(s => {
-              slots.push({
-                  key: crypto.randomUUID(),
-                  itemId: s.itemId,
-                  price: s.price,
-                  quantity: s.quantity || 1
-              });
-          });
+          const slots: SnackSlot[] = snackLogs.map(s => ({
+              key: crypto.randomUUID(),
+              itemId: s.itemId,
+              price: s.price,
+              quantity: s.quantity || 1
+          }));
           setSnackSlots(slots);
       } else {
           setSnackSlots([{ key: crypto.randomUUID(), itemId: '', price: 0, quantity: 1 }]);
       }
 
-      // 4. Set Editing State (Track IDs to delete later)
       setEditingLogIds(logs.map(l => l.id));
-      
-      // Scroll to top
+      setIsManualTime(true);
+      setManualTimestamp(getLocalDateTimeString(new Date(first.date)));
       window.scrollTo({ top: 0, behavior: 'smooth' });
   };
-
-  // --- Submit Logic (Add or Update) ---
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -203,23 +194,24 @@ export const DailyEntry: React.FC = () => {
     setSubmitting(true);
 
     try {
-        // 1. If Editing, Delete OLD entries first (Using BATCH DELETE)
         if (editingLogIds && editingLogIds.length > 0) {
             await StorageService.removeConsumptionBatch(editingLogIds);
         }
 
-        // 2. Prepare NEW entries
         const newEntries: Consumption[] = [];
         
-        // Generate LOCAL timestamp format (YYYY-MM-DDTHH:mm:ss.sss)
-        // This prevents the "Previous Day" bug caused by UTC conversion
-        const now = new Date();
-        const offset = now.getTimezoneOffset() * 60000;
-        const localTimestamp = new Date(now.getTime() - offset).toISOString().slice(0, -1); 
+        let finalTimestamp: string;
+        if (isManualTime) {
+            // Use the manually selected timestamp
+            finalTimestamp = new Date(manualTimestamp).toISOString().slice(0, -1);
+        } else {
+            // Use current system time
+            const now = new Date();
+            const offset = now.getTimezoneOffset() * 60000;
+            finalTimestamp = new Date(now.getTime() - offset).toISOString().slice(0, -1);
+        }
 
-        // CALCULATE SEQUENTIAL ID START POINT
         const allLogs = StorageService.getConsumptions();
-
         let currentMaxId = allLogs.reduce((max, log) => {
             if (log.id.startsWith('c')) {
                 const num = parseInt(log.id.substring(1), 10);
@@ -229,7 +221,6 @@ export const DailyEntry: React.FC = () => {
         }, 0);
 
         const createEntry = (itemId: string, price: number, qty: number, type: 'drink' | 'snack'): Consumption => {
-            // FIX: Using += 1 instead of ++ to be safe
             currentMaxId += 1;
             const item = items.find(i => i.id === itemId);
             return {
@@ -239,7 +230,7 @@ export const DailyEntry: React.FC = () => {
                 itemName: item ? item.name : 'Unknown',
                 itemType: type,
                 price: price,
-                date: localTimestamp, // Store Local Time
+                date: finalTimestamp,
                 quantity: qty 
             };
         };
@@ -260,7 +251,6 @@ export const DailyEntry: React.FC = () => {
             return; 
         }
 
-        // 3. Batch Add
         if (newEntries.length > 0) {
             await StorageService.addConsumptionBatch(newEntries);
         }
@@ -281,11 +271,10 @@ export const DailyEntry: React.FC = () => {
   };
 
   const confirmDelete = async (logs: Consumption[], groupKey: string) => {
-    if (deletingId) return; // Prevent double delete
+    if (deletingId) return;
     setDeletingId(groupKey);
     setPendingDeleteId(null);
     try {
-        // Batch Delete
         const idsToDelete = logs.map(l => l.id);
         await StorageService.removeConsumptionBatch(idsToDelete);
         refreshLogs();
@@ -296,7 +285,6 @@ export const DailyEntry: React.FC = () => {
     }
   };
 
-  // Updated aggregation for UI display
   const getAggregatedLogs = (logs: Consumption[]) => {
       const agg: Record<string, { count: number, name: string, type: string, totalCost: number }> = {};
       logs.forEach(log => {
@@ -315,20 +303,49 @@ export const DailyEntry: React.FC = () => {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
       {/* Entry Form */}
-      <div className="lg:col-span-6 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-        <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-semibold flex items-center gap-2 text-tea-900">
-            <Coffee className="w-5 h-5" />
-            {editingLogIds ? 'Edit Entry' : 'New Daily Entry'}
-            </h2>
-            {editingLogIds && (
-                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded font-medium">
-                    Editing Mode
-                </span>
+      <div className={`lg:col-span-6 p-6 rounded-xl shadow-sm border transition-all duration-300 ${isManualTime ? 'bg-orange-50/30 border-orange-200 ring-1 ring-orange-100' : 'bg-white border-gray-100'}`}>
+        <div className="flex justify-between items-start mb-6">
+            <div>
+                <h2 className="text-xl font-semibold flex items-center gap-2 text-tea-900">
+                    <Coffee className="w-5 h-5" />
+                    {editingLogIds ? 'Edit Entry' : 'New Daily Entry'}
+                </h2>
+                {isManualTime && !editingLogIds && (
+                    <span className="text-[10px] bg-orange-100 text-orange-700 px-2 py-0.5 rounded font-bold uppercase tracking-wider mt-1 inline-block">
+                        Missed Entry Mode
+                    </span>
+                )}
+            </div>
+            {!editingLogIds && (
+                <button
+                    type="button"
+                    onClick={() => setIsManualTime(!isManualTime)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${isManualTime ? 'bg-orange-600 text-white shadow-md' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                >
+                    {isManualTime ? <X className="w-3.5 h-3.5" /> : <History className="w-3.5 h-3.5" />}
+                    {isManualTime ? 'Cancel Missed Entry' : 'Add Missed Entry'}
+                </button>
             )}
         </div>
         
         <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Missed Entry Time Picker */}
+          {isManualTime && (
+              <div className="bg-white p-4 rounded-lg border border-orange-200 shadow-sm animate-fade-in">
+                  <label className="block text-sm font-bold text-orange-800 mb-2 flex items-center gap-2">
+                      <CalendarClock className="w-4 h-4" /> Entry Date & Time
+                  </label>
+                  <input
+                    type="datetime-local"
+                    className="w-full p-3 bg-orange-50/50 border border-orange-200 rounded-lg focus:ring-2 focus:ring-orange-400 outline-none font-medium text-gray-800"
+                    value={manualTimestamp}
+                    onChange={(e) => setManualTimestamp(e.target.value)}
+                    required
+                  />
+                  <p className="text-[10px] text-orange-500 mt-2 font-medium">Selecting a past date will record items for that specific session.</p>
+              </div>
+          )}
+
           <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
             <label className="block text-sm font-bold text-gray-700 mb-2">Select Employee</label>
             <div className="relative">
@@ -428,7 +445,7 @@ export const DailyEntry: React.FC = () => {
           </div>
 
           <div className="flex gap-3">
-            {editingLogIds && (
+            {(editingLogIds || isManualTime) && (
                 <button
                     type="button"
                     onClick={resetForm}
@@ -443,8 +460,8 @@ export const DailyEntry: React.FC = () => {
                 disabled={submitting}
                 className={`flex-1 font-bold py-4 px-6 rounded-lg transition-colors flex items-center justify-center gap-2 shadow-md hover:shadow-lg transform active:scale-95 duration-150 text-white ${editingLogIds ? 'bg-blue-600 hover:bg-blue-700' : 'bg-tea-600 hover:bg-tea-500'}`}
             >
-                {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : (editingLogIds ? <Save className="w-5 h-5" /> : <Plus className="w-5 h-5" />)}
-                {editingLogIds ? 'Update Entry' : 'Add to Log'}
+                {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : (editingLogIds ? <Save className="w-5 h-5" /> : (isManualTime ? <Check className="w-5 h-5" /> : <Plus className="w-5 h-5" />))}
+                {editingLogIds ? 'Update Entry' : (isManualTime ? 'Add Missed Log' : 'Add to Log')}
             </button>
           </div>
         </form>
